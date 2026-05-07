@@ -10,6 +10,9 @@ xcuserdata/
 # Swift Package Manager
 .build/
 
+# sourcekit-lsp / xcode-build-server (machine-specific DerivedData path)
+buildServer.json
+
 # Playgrounds
 timeline.xctimeline
 playground.xcworkspace
@@ -18,3 +21,14 @@ playground.xcworkspace
 *.ipa
 *.dSYM.zip
 *.dSYM
+
+# Agent skills (installed via `npx skills`; restored from skills-lock.json)
+.agents/
+
+# Local Whisper model files
+models/*.bin
+
+# Whisper inference: build artifacts and bundled resources
+.build/whisper.cpp/
+BundledResources/Bin/
+BundledResources/Models/
