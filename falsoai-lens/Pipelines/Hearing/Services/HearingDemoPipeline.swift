@@ -38,6 +38,9 @@ final class HearingDemoPipeline: ObservableObject {
 
         #if DEBUG
         WhisperCppEngine.runParserSmokeCheck()
+        RMSVoiceActivityDetector.runVADSmokeCheck()
+        MixedAudioBufferStore.runMixerSmokeCheck()
+        LiveMixedAudioTranscriptionPipeline.runStateSmokeCheck()
         #endif
     }
 
@@ -92,6 +95,9 @@ final class HearingDemoPipeline: ObservableObject {
             let elapsed = Date().timeIntervalSince(started)
             latestResult = result
             lastInferenceDurationSeconds = elapsed
+            if result.text.isEmpty, result.segments.isEmpty {
+                errorMessage = "No voice detected in the selected file. The file may be silent, or its content fell below the -40 dBFS detection threshold."
+            }
             logger.info(
                 "HearingDemo transcription completed mode=\(String(describing: mode), privacy: .public), elapsedSeconds=\(elapsed, privacy: .public), characters=\(result.text.count, privacy: .public), segments=\(result.segments.count, privacy: .public), language=\(result.language ?? "nil", privacy: .public)"
             )

@@ -4,6 +4,7 @@ import OSLog
 actor WhisperCppEngine: TranscriptionEngine {
     private let executableURL: URL
     private let modelURL: URL
+    private let voiceActivityDetector: VoiceActivityDetector?
     private let deletesJSONSidecarOnSuccess: Bool
 
     private nonisolated static let bundledExecutableName = "whisper-cli"
@@ -18,6 +19,7 @@ actor WhisperCppEngine: TranscriptionEngine {
     init(
         executableURL: URL? = nil,
         modelURL: URL? = nil,
+        voiceActivityDetector: VoiceActivityDetector? = RMSVoiceActivityDetector(),
         deletesJSONSidecarOnSuccess: Bool = true
     ) throws {
         let resolvedExecutableURL = try executableURL ?? Self.resolveBundledExecutable()
@@ -30,10 +32,11 @@ actor WhisperCppEngine: TranscriptionEngine {
 
         self.executableURL = resolvedExecutableURL
         self.modelURL = resolvedModelURL
+        self.voiceActivityDetector = voiceActivityDetector
         self.deletesJSONSidecarOnSuccess = deletesJSONSidecarOnSuccess
 
         Self.logger.info(
-            "WhisperCppEngine initialized executable=\(resolvedExecutableURL.path, privacy: .public), model=\(resolvedModelURL.path, privacy: .public), deletesSidecarOnSuccess=\(deletesJSONSidecarOnSuccess, privacy: .public)"
+            "WhisperCppEngine initialized executable=\(resolvedExecutableURL.path, privacy: .public), model=\(resolvedModelURL.path, privacy: .public), vadEnabled=\(voiceActivityDetector != nil, privacy: .public), deletesSidecarOnSuccess=\(deletesJSONSidecarOnSuccess, privacy: .public)"
         )
     }
 
@@ -42,6 +45,45 @@ actor WhisperCppEngine: TranscriptionEngine {
         mode: TranscriptionMode
     ) async throws -> TranscriptionResult {
         try Self.validateAudioFile(audioFile)
+
+        let workingAudioFile: URL
+        var trimmedAudioFile: URL?
+        if let voiceActivityDetector {
+            Self.logger.info("vad.input audioFile=\(audioFile.path, privacy: .private)")
+            do {
+                trimmedAudioFile = try await voiceActivityDetector.trimSilence(in: audioFile)
+            } catch let error as VoiceActivityError {
+                let message = [
+                    error.errorDescription,
+                    error.recoverySuggestion
+                ]
+                .compactMap { $0 }
+                .joined(separator: " ")
+                throw WhisperEngineError.processFailed(
+                    exitCode: -1,
+                    stderr: "VAD failed: \(message)"
+                )
+            }
+
+            guard let trimmedAudioFile else {
+                Self.logger.info("VAD found no voice; skipping whisper invocation")
+                return TranscriptionResult(
+                    text: "",
+                    segments: [],
+                    language: nil,
+                    duration: 0
+                )
+            }
+
+            workingAudioFile = trimmedAudioFile
+        } else {
+            workingAudioFile = audioFile
+        }
+        defer {
+            if let trimmedAudioFile {
+                try? FileManager.default.removeItem(at: trimmedAudioFile)
+            }
+        }
 
         let outputPrefix = NSTemporaryDirectory()
             + "whisper-output-\(UUID().uuidString)"
@@ -53,7 +95,7 @@ actor WhisperCppEngine: TranscriptionEngine {
         }
 
         let result = try await runWhisper(
-            audioFile: audioFile,
+            audioFile: workingAudioFile,
             mode: mode,
             outputPrefix: outputPrefix
         )
@@ -188,7 +230,7 @@ actor WhisperCppEngine: TranscriptionEngine {
         let stdout: String
     }
 
-    private static func validateAudioFile(_ audioFile: URL) throws {
+    private nonisolated static func validateAudioFile(_ audioFile: URL) throws {
         let path = audioFile.path
         let fileManager = FileManager.default
         guard fileManager.fileExists(atPath: path) else {
@@ -213,8 +255,11 @@ actor WhisperCppEngine: TranscriptionEngine {
             "-of", outputPrefix,
             "-nt",
         ]
-        if mode == .translateToEnglish {
+        switch mode {
+        case .translateToEnglish:
             arguments.append("-tr")
+        case .transcribeOriginalLanguage:
+            break
         }
 
         let process = Process()
@@ -312,7 +357,7 @@ actor WhisperCppEngine: TranscriptionEngine {
     }
 }
 
-private final class AsyncDataAccumulator: @unchecked Sendable {
+private nonisolated final class AsyncDataAccumulator: @unchecked Sendable {
     private let lock = NSLock()
     private var data = Data()
 

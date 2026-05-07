@@ -6,7 +6,7 @@ struct TranscriptSegment: Sendable, Equatable, Identifiable {
     let endTime: TimeInterval?
     let text: String
 
-    init(
+    nonisolated init(
         id: UUID = UUID(),
         startTime: TimeInterval?,
         endTime: TimeInterval?,

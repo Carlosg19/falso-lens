@@ -13,6 +13,7 @@ import UniformTypeIdentifiers
 struct ContentView: View {
     @StateObject private var pipeline = DemoScanPipeline()
     @StateObject private var hearing = HearingDemoPipeline()
+    @StateObject private var liveHearing = LiveMixedAudioTranscriptionPipeline()
     @State private var hearingMode: TranscriptionMode = .transcribeOriginalLanguage
     @State private var permissionSnapshot: PermissionSnapshot?
     @State private var permissionDebugSummary = "Permissions not checked yet"
@@ -359,6 +360,92 @@ struct ContentView: View {
                     .foregroundStyle(.red)
                     .textSelection(.enabled)
             }
+
+            Divider()
+
+            VStack(alignment: .leading, spacing: 10) {
+                Text("Computer + Mic Live")
+                    .font(.headline)
+
+                HStack {
+                    Button {
+                        Task {
+                            if liveHearing.isRunning {
+                                await liveHearing.stop()
+                            } else {
+                                await liveHearing.start(mode: hearingMode)
+                            }
+                        }
+                    } label: {
+                        Label(
+                            liveHearing.isRunning ? "Stop" : "Start Computer + Mic",
+                            systemImage: liveHearing.isRunning ? "stop.circle" : "record.circle"
+                        )
+                    }
+                    .disabled(!liveHearing.isEngineAvailable && !liveHearing.isRunning)
+
+                    Button {
+                        liveHearing.clearTranscript()
+                    } label: {
+                        Label("Clear", systemImage: "trash")
+                    }
+                    .disabled(liveHearing.transcriptText.isEmpty && liveHearing.errorMessage == nil)
+
+                    Button {
+                        copyToPasteboard(liveHearing.transcriptText)
+                    } label: {
+                        Label("Copy", systemImage: "doc.on.doc")
+                    }
+                    .disabled(liveHearing.transcriptText.isEmpty)
+                }
+
+                HStack(spacing: 12) {
+                    Label(liveHearing.statusText, systemImage: liveHearing.isRunning ? "waveform" : "waveform.slash")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+
+                    if liveHearing.isProcessingChunk {
+                        ProgressView()
+                            .controlSize(.small)
+                    }
+                }
+
+                HStack(spacing: 12) {
+                    if liveHearing.chunksTranscribed > 0 {
+                        Text("Chunks: \(liveHearing.chunksTranscribed)")
+                    }
+
+                    if let elapsed = liveHearing.lastInferenceDurationSeconds {
+                        Text(String(format: "Last inference: %.2f s", elapsed))
+                    }
+
+                    if let language = liveHearing.latestLanguage {
+                        Text("Language: \(language)")
+                    }
+                }
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+                if !liveHearing.transcriptText.isEmpty {
+                    ScrollView {
+                        Text(liveHearing.transcriptText)
+                            .font(.body)
+                            .textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(8)
+                    }
+                    .frame(minHeight: 120, maxHeight: 220)
+                    .background(Color(nsColor: .textBackgroundColor))
+                    .clipShape(RoundedRectangle(cornerRadius: 6))
+                }
+
+                if let liveError = liveHearing.errorMessage {
+                    Text(liveError)
+                        .font(.callout)
+                        .foregroundStyle(.red)
+                        .textSelection(.enabled)
+                }
+            }
         }
         .padding()
         .background(.thinMaterial)
@@ -375,6 +462,11 @@ struct ContentView: View {
         if panel.runModal() == .OK, let url = panel.url {
             hearing.setSelectedFile(url)
         }
+    }
+
+    private func copyToPasteboard(_ text: String) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
     }
 
     private func formatRange(start: TimeInterval?, end: TimeInterval?) -> String {

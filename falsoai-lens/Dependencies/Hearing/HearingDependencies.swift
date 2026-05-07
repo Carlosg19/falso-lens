@@ -6,4 +6,8 @@ enum HearingDependencies {
     static let bundledExecutableName = "whisper-cli"
     static let bundledModelResourceName = "ggml-small"
     static let bundledModelResourceExtension = "bin"
+    static let vadWindowDurationSeconds = 0.030
+    static let vadThresholdDBFS = -40.0
+    static let vadPaddingSeconds = 0.200
+    static let vadMinimumVoicedDurationSeconds = 0.100
 }

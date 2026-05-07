@@ -11,4 +11,5 @@ import ApplicationServices
 
 enum DependencyImports {
     static let configured = true
+    static let hearingConfigured = HearingDependencies.captureEngineType == AVAudioEngine.self
 }

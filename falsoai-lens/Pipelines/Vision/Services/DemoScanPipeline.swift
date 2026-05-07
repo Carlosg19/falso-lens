@@ -110,6 +110,7 @@ final class DemoScanPipeline: ObservableObject {
             let recognizedText = try ocrService.recognizeJoinedText(in: image)
             lastOCRText = recognizedText
             logger.info("OCR finished characters=\(recognizedText.count, privacy: .public), isEmpty=\(recognizedText.isEmpty, privacy: .public)")
+            logger.info("OCR content:\n\(recognizedText, privacy: .public)")
 
             guard !recognizedText.isEmpty else {
                 logger.warning("Capture/OCR demo found no readable text")
