@@ -20,6 +20,11 @@
 			path = "falsoai-lens";
 			sourceTree = "<group>";
 		};
+		BD5E3B4B2FAC33B700FE442A /* BundledResources */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = BundledResources;
+			sourceTree = "<group>";
+		};
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -37,6 +42,7 @@
 		BD5E3A292F9C519600FE442A = {
 			isa = PBXGroup;
 			children = (
+				BD5E3B4B2FAC33B700FE442A /* BundledResources */,
 				BD5E3A342F9C519600FE442A /* falsoai-lens */,
 				BD5E3A332F9C519600FE442A /* Products */,
 			);
@@ -60,6 +66,7 @@
 				BD5E3A2E2F9C519600FE442A /* Sources */,
 				BD5E3A2F2F9C519600FE442A /* Frameworks */,
 				BD5E3A302F9C519600FE442A /* Resources */,
+				BD5E3B4E2FAC341B00FE442A /* Re-sign bundled whisper-cli */,
 			);
 			buildRules = (
 			);
@@ -67,6 +74,7 @@
 			);
 			fileSystemSynchronizedGroups = (
 				BD5E3A342F9C519600FE442A /* falsoai-lens */,
+				BD5E3B4B2FAC33B700FE442A /* BundledResources */,
 			);
 			name = "falsoai-lens";
 			packageProductDependencies = (
@@ -123,6 +131,27 @@
 		};
 /* End PBXResourcesBuildPhase section */
 
+/* Begin PBXShellScriptBuildPhase section */
+		BD5E3B4E2FAC341B00FE442A /* Re-sign bundled whisper-cli */ = {
+			isa = PBXShellScriptBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "Re-sign bundled whisper-cli";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "set -euo pipefail\nTARGET_BIN=\"$CODESIGNING_FOLDER_PATH/Contents/Resources/whisper-cli\"\nif [ -f \"$TARGET_BIN\" ]; then\n    /usr/bin/codesign \\\n        --force \\\n        --options runtime \\\n        --sign \"${EXPANDED_CODE_SIGN_IDENTITY:-${CODE_SIGN_IDENTITY:--}}\" \\\n        \"$TARGET_BIN\"\n    echo \"✅ Re-signed $TARGET_BIN\"\nelse\n    echo \"⚠️  $TARGET_BIN not found — skipping re-sign\"\nfi\n\n";
+		};
+/* End PBXShellScriptBuildPhase section */
+
 /* Begin PBXSourcesBuildPhase section */
 		BD5E3A2E2F9C519600FE442A /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
@@ -172,7 +201,7 @@
 				DEVELOPMENT_TEAM = 7J4VB299Y2;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				ENABLE_TESTABILITY = YES;
-				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				GCC_C_LANGUAGE_STANDARD = gnu17;
 				GCC_DYNAMIC_NO_PIC = NO;
 				GCC_NO_COMMON_BLOCKS = YES;
@@ -236,7 +265,7 @@
 				DEVELOPMENT_TEAM = 7J4VB299Y2;
 				ENABLE_NS_ASSERTIONS = NO;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
-				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				GCC_C_LANGUAGE_STANDARD = gnu17;
 				GCC_NO_COMMON_BLOCKS = YES;
 				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
