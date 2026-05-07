@@ -5,11 +5,15 @@
 //  Created by Carlos Garcia on 24/04/26.
 //
 
+import AppKit
 import SwiftData
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct ContentView: View {
     @StateObject private var pipeline = DemoScanPipeline()
+    @StateObject private var hearing = HearingDemoPipeline()
+    @State private var hearingMode: TranscriptionMode = .transcribeOriginalLanguage
     @State private var permissionSnapshot: PermissionSnapshot?
     @State private var permissionDebugSummary = "Permissions not checked yet"
     @State private var lastPermissionAction = "No permission action yet"
@@ -162,13 +166,27 @@ struct ContentView: View {
 
                 if !pipeline.lastOCRText.isEmpty {
                     VStack(alignment: .leading, spacing: 8) {
-                        Text("Last OCR Capture")
-                            .font(.headline)
-                        Text(pipeline.lastOCRText)
-                            .lineLimit(6)
-                            .textSelection(.enabled)
-                            .foregroundStyle(.secondary)
+                        HStack {
+                            Text("Last OCR Capture")
+                                .font(.headline)
+                            Spacer()
+                            Text("\(pipeline.lastOCRText.count) chars")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        ScrollView {
+                            Text(pipeline.lastOCRText)
+                                .font(.system(.body, design: .monospaced))
+                                .textSelection(.enabled)
+                                .foregroundStyle(.primary)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(8)
+                        }
+                        .frame(minHeight: 320, maxHeight: .infinity)
+                        .background(Color(nsColor: .textBackgroundColor))
+                        .clipShape(RoundedRectangle(cornerRadius: 6))
                     }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                     .padding()
                     .background(.thinMaterial)
                     .clipShape(RoundedRectangle(cornerRadius: 8))
@@ -183,7 +201,11 @@ struct ContentView: View {
                     resultView(result)
                 }
 
-                Spacer()
+                hearingDemoSection
+
+                if pipeline.lastOCRText.isEmpty {
+                    Spacer()
+                }
             }
             .padding()
         }
@@ -241,6 +263,131 @@ struct ContentView: View {
         .padding()
         .background(.thinMaterial)
         .clipShape(RoundedRectangle(cornerRadius: 8))
+    }
+
+    private var hearingDemoSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Live Audio (Hearing) Demo")
+                .font(.title2)
+
+            HStack {
+                Button {
+                    pickHearingFile()
+                } label: {
+                    Label("Pick WAV File", systemImage: "doc.badge.plus")
+                }
+
+                Picker("Mode", selection: $hearingMode) {
+                    ForEach(TranscriptionMode.allCases) { mode in
+                        Text(mode.displayName).tag(mode)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .frame(maxWidth: 280)
+            }
+
+            HStack {
+                Button {
+                    Task { await hearing.transcribe(mode: hearingMode) }
+                } label: {
+                    Label(
+                        hearing.isTranscribing ? "Transcribing…" : "Transcribe",
+                        systemImage: "waveform.badge.mic"
+                    )
+                }
+                .disabled(
+                    hearing.isTranscribing
+                        || hearing.lastSelectedFileURL == nil
+                        || !hearing.isEngineAvailable
+                )
+
+                if let url = hearing.lastSelectedFileURL {
+                    Text("Selected: \(url.lastPathComponent)")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            if let elapsed = hearing.lastInferenceDurationSeconds {
+                Text(String(format: "Inference: %.2f s", elapsed))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            if let language = hearing.latestResult?.language {
+                Text("Language: \(language)")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            if let result = hearing.latestResult, !result.text.isEmpty {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Transcript")
+                        .font(.headline)
+                    ScrollView {
+                        Text(result.text)
+                            .font(.body)
+                            .textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(8)
+                    }
+                    .frame(minHeight: 100, maxHeight: 200)
+                    .background(Color(nsColor: .textBackgroundColor))
+                    .clipShape(RoundedRectangle(cornerRadius: 6))
+                }
+
+                if !result.segments.isEmpty {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Segments")
+                            .font(.headline)
+                        ForEach(result.segments) { segment in
+                            HStack(alignment: .top, spacing: 8) {
+                                Text(formatRange(start: segment.startTime, end: segment.endTime))
+                                    .font(.system(.caption, design: .monospaced))
+                                    .foregroundStyle(.secondary)
+                                Text(segment.text.trimmingCharacters(in: .whitespaces))
+                                    .font(.callout)
+                            }
+                        }
+                    }
+                }
+            }
+
+            if let hearingError = hearing.errorMessage {
+                Text(hearingError)
+                    .font(.callout)
+                    .foregroundStyle(.red)
+                    .textSelection(.enabled)
+            }
+        }
+        .padding()
+        .background(.thinMaterial)
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+    }
+
+    private func pickHearingFile() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        panel.allowedContentTypes = [.wav, .audio]
+        panel.title = "Pick a 16 kHz mono WAV file"
+        if panel.runModal() == .OK, let url = panel.url {
+            hearing.setSelectedFile(url)
+        }
+    }
+
+    private func formatRange(start: TimeInterval?, end: TimeInterval?) -> String {
+        let startText = formatTimestamp(start) ?? "--:--.--"
+        let endText = formatTimestamp(end) ?? "--:--.--"
+        return "[\(startText) → \(endText)]"
+    }
+
+    private func formatTimestamp(_ seconds: TimeInterval?) -> String? {
+        guard let seconds else { return nil }
+        let minutes = Int(seconds) / 60
+        let remaining = seconds - TimeInterval(minutes * 60)
+        return String(format: "%02d:%05.2f", minutes, remaining)
     }
 }
 
