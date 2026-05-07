@@ -13,7 +13,7 @@ enum WhisperEngineError: LocalizedError, Equatable {
         case .missingExecutable:
             return "Bundled whisper-cli binary was not found inside the app."
         case .missingModel:
-            return "Bundled Whisper model (ggml-base.bin) was not found inside the app."
+            return "Bundled Whisper model (ggml-small.bin) was not found inside the app."
         case let .audioFileNotFound(url):
             return "Audio file does not exist at \(url.path)."
         case let .audioFileEmpty(url):
@@ -32,7 +32,7 @@ enum WhisperEngineError: LocalizedError, Equatable {
         case .missingExecutable:
             return "Run `bash scripts/build-whisper-cli.sh` and rebuild the app."
         case .missingModel:
-            return "Download `ggml-base.bin` (run `.build/whisper.cpp/models/download-ggml-model.sh base`) and place it at `BundledResources/Models/ggml-base.bin`, then rebuild the app."
+            return "Download `ggml-small.bin` (run `.build/whisper.cpp/models/download-ggml-model.sh small`) and place it at `BundledResources/Models/ggml-small.bin`, then rebuild the app."
         case .audioFileNotFound:
             return "Pick a WAV file that exists, or check that the audio capture pipeline produced a file."
         case .audioFileEmpty:

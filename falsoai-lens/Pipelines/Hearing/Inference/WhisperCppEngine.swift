@@ -7,7 +7,7 @@ actor WhisperCppEngine: TranscriptionEngine {
     private let deletesJSONSidecarOnSuccess: Bool
 
     private nonisolated static let bundledExecutableName = "whisper-cli"
-    private nonisolated static let bundledModelResourceName = "ggml-base"
+    private nonisolated static let bundledModelResourceName = "ggml-small"
     private nonisolated static let bundledModelResourceExtension = "bin"
 
     private nonisolated static let logger = Logger(
