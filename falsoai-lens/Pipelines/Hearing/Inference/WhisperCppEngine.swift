@@ -6,8 +6,6 @@ actor WhisperCppEngine: TranscriptionEngine {
     private let modelURL: URL
     private let deletesJSONSidecarOnSuccess: Bool
 
-    private nonisolated static let bundledExecutableSubdirectory = "BundledResources/Bin"
-    private nonisolated static let bundledModelSubdirectory = "BundledResources/Models"
     private nonisolated static let bundledExecutableName = "whisper-cli"
     private nonisolated static let bundledModelResourceName = "ggml-base"
     private nonisolated static let bundledModelResourceExtension = "bin"
@@ -294,24 +292,22 @@ actor WhisperCppEngine: TranscriptionEngine {
     private nonisolated static func resolveBundledExecutable() throws -> URL {
         if let url = Bundle.main.url(
             forResource: bundledExecutableName,
-            withExtension: nil,
-            subdirectory: bundledExecutableSubdirectory
+            withExtension: nil
         ) {
             return url
         }
-        logger.error("Could not find bundled whisper-cli at \(bundledExecutableSubdirectory, privacy: .public)/\(bundledExecutableName, privacy: .public)")
+        logger.error("Could not find bundled whisper-cli (resource name=\(bundledExecutableName, privacy: .public))")
         throw WhisperEngineError.missingExecutable
     }
 
     private nonisolated static func resolveBundledModel() throws -> URL {
         if let url = Bundle.main.url(
             forResource: bundledModelResourceName,
-            withExtension: bundledModelResourceExtension,
-            subdirectory: bundledModelSubdirectory
+            withExtension: bundledModelResourceExtension
         ) {
             return url
         }
-        logger.error("Could not find bundled \(bundledModelResourceName, privacy: .public).\(bundledModelResourceExtension, privacy: .public) at \(bundledModelSubdirectory, privacy: .public)")
+        logger.error("Could not find bundled \(bundledModelResourceName, privacy: .public).\(bundledModelResourceExtension, privacy: .public)")
         throw WhisperEngineError.missingModel
     }
 }
