@@ -303,6 +303,10 @@ struct ContentView: View {
         computerHearing.errorMessage != nil || microphoneHearing.errorMessage != nil
     }
 
+    private func annotation(for chunkID: String) -> DuplicateAnnotation? {
+        duplicateAnalyzer.annotations.first { $0.chunkID == chunkID }
+    }
+
     private var liveTranscriptDocument: SourceSeparatedAudioTranscript {
         SourceSeparatedAudioTranscript(
             language: microphoneHearing.transcript.latestLanguage
@@ -537,6 +541,10 @@ struct ContentView: View {
                     }
                 }
 
+                if !duplicateAnalyzer.annotations.isEmpty {
+                    duplicateSummarySection
+                }
+
                 if let computerError = computerHearing.errorMessage {
                     Text("Computer audio: \(computerError)")
                         .font(.callout)
@@ -662,7 +670,7 @@ struct ContentView: View {
                     ScrollView {
                         LazyVStack(alignment: .leading, spacing: 0) {
                             ForEach(state.chunks) { chunk in
-                                chunkObjectRow(chunk)
+                                chunkObjectRow(chunk, annotation: annotation(for: chunk.chunkID))
 
                                 if chunk.id != state.chunks.last?.id {
                                     Divider()
@@ -684,11 +692,23 @@ struct ContentView: View {
         }
     }
 
-    private func chunkObjectRow(_ chunk: SourceTranscriptChunk) -> some View {
+    private func chunkObjectRow(
+        _ chunk: SourceTranscriptChunk,
+        annotation: DuplicateAnnotation? = nil
+    ) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(alignment: .firstTextBaseline) {
                 Text(chunk.chunkID)
                     .font(.system(.caption, design: .monospaced).weight(.semibold))
+                if annotation != nil {
+                    Label("Duplicate", systemImage: "doc.on.doc.fill")
+                        .labelStyle(.titleAndIcon)
+                        .font(.caption2.weight(.semibold))
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(Color.orange.opacity(0.18), in: Capsule())
+                        .foregroundStyle(.orange)
+                }
                 Spacer()
                 Text(chunk.source.displayName)
                     .font(.caption.weight(.medium))
@@ -713,9 +733,28 @@ struct ContentView: View {
                 .font(.callout)
                 .textSelection(.enabled)
                 .frame(maxWidth: .infinity, alignment: .leading)
+
+            if let annotation {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Duplicate of \(annotation.duplicateOfChunkID) · \(formatConfidence(annotation.confidence))")
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(.orange)
+                    if !annotation.signals.isEmpty {
+                        Text("Signals: \(annotation.signals.joined(separator: ", "))")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
         }
         .padding(10)
         .frame(maxWidth: .infinity, alignment: .leading)
+        .background(annotation != nil ? Color.orange.opacity(0.06) : Color.clear)
+    }
+
+    private func formatConfidence(_ value: Double) -> String {
+        "\(Int((value * 100).rounded()))%"
     }
 
     private func formatRange(start: TimeInterval?, end: TimeInterval?) -> String {
@@ -726,6 +765,53 @@ struct ContentView: View {
 
     private func formatDuration(_ seconds: TimeInterval) -> String {
         String(format: "%.2f s", seconds)
+    }
+
+    private var duplicateSummarySection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .firstTextBaseline) {
+                Label("Cross-source Duplicates", systemImage: "doc.on.doc")
+                    .font(.headline)
+                    .foregroundStyle(.orange)
+                Spacer()
+                Text("\(duplicateAnalyzer.annotations.count) flagged")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Text("Chunks the analyzer believes are the same utterance heard on both inputs. Confidence weights text overlap, PCM correlation, timing, language, and duration.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            ForEach(duplicateAnalyzer.annotations) { annotation in
+                VStack(alignment: .leading, spacing: 3) {
+                    HStack(alignment: .firstTextBaseline) {
+                        Text("\(annotation.chunkID)  ↔  \(annotation.duplicateOfChunkID)")
+                            .font(.system(.caption, design: .monospaced).weight(.semibold))
+                        Spacer()
+                        Text(formatConfidence(annotation.confidence))
+                            .font(.caption.weight(.medium))
+                            .foregroundStyle(.orange)
+                    }
+                    if !annotation.signals.isEmpty {
+                        Text(annotation.signals.joined(separator: " · "))
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .padding(.vertical, 4)
+
+                if annotation.id != duplicateAnalyzer.annotations.last?.id {
+                    Divider()
+                }
+            }
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .overlay {
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(Color.orange.opacity(0.35), lineWidth: 1)
+        }
     }
 
     private func formatTimestamp(_ seconds: TimeInterval?) -> String? {
