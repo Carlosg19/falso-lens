@@ -18,6 +18,7 @@ final class LiveAudioTranscriptionPipeline: ObservableObject {
     private let engine: TranscriptionEngine?
     private let logger: Logger
     private var captureTask: Task<Void, Never>?
+    private var chunkHook: (@Sendable (LiveTranscriptChunkEvent) -> Void)?
 
     static func computer() -> LiveAudioTranscriptionPipeline {
         LiveAudioTranscriptionPipeline(
@@ -94,6 +95,10 @@ final class LiveAudioTranscriptionPipeline: ObservableObject {
         if source == .microphone {
             statusText = "\(source.displayName) input device selected."
         }
+    }
+
+    func setChunkHook(_ hook: (@Sendable (LiveTranscriptChunkEvent) -> Void)?) {
+        self.chunkHook = hook
     }
 
     private static func makeDefaultCaptureProvider(
@@ -222,7 +227,13 @@ final class LiveAudioTranscriptionPipeline: ObservableObject {
             self.errorMessage = errorMessage
             logger.error("\(self.source.rawValue, privacy: .public) transcription error: \(errorMessage, privacy: .public)")
         } else {
-            append(result: output.result, chunk: chunk, elapsed: output.elapsed)
+            append(
+                result: output.result,
+                chunk: chunk,
+                normalizedSamples: output.normalizedSamples,
+                normalizedSampleRate: output.normalizedSampleRate,
+                elapsed: output.elapsed
+            )
         }
 
         isProcessingChunk = false
@@ -255,12 +266,16 @@ final class LiveAudioTranscriptionPipeline: ObservableObject {
             let result = try await engine.transcribe(audioFile: fileURL, mode: mode)
             return SourceTranscriptionOutput(
                 result: result,
+                normalizedSamples: normalizedChunk.samples,
+                normalizedSampleRate: normalizedChunk.sampleRate,
                 elapsed: Date().timeIntervalSince(started),
                 errorMessage: nil
             )
         } catch {
             return SourceTranscriptionOutput(
                 result: TranscriptionResult(text: "", segments: [], language: nil, duration: 0),
+                normalizedSamples: [],
+                normalizedSampleRate: 0,
                 elapsed: Date().timeIntervalSince(started),
                 errorMessage: Self.userFacingMessage(for: error)
             )
@@ -270,6 +285,8 @@ final class LiveAudioTranscriptionPipeline: ObservableObject {
     private func append(
         result: TranscriptionResult,
         chunk: BufferedAudioChunk,
+        normalizedSamples: [Float],
+        normalizedSampleRate: Double,
         elapsed: Double
     ) {
         transcript.lastInferenceDurationSeconds = elapsed
@@ -299,6 +316,15 @@ final class LiveAudioTranscriptionPipeline: ObservableObject {
         logger.info(
             "\(self.source.rawValue, privacy: .public) transcription appended characters=\(text.count, privacy: .public), chunks=\(self.transcript.chunksTranscribed, privacy: .public), elapsedSeconds=\(elapsed, privacy: .public), language=\(result.language ?? "nil", privacy: .public)"
         )
+
+        if let chunkHook, !normalizedSamples.isEmpty, normalizedSampleRate > 0 {
+            let event = LiveTranscriptChunkEvent(
+                chunk: transcriptChunk,
+                normalizedSamples: normalizedSamples,
+                normalizedSampleRate: normalizedSampleRate
+            )
+            chunkHook(event)
+        }
     }
 
     private nonisolated static func makeTranscriptChunk(
@@ -439,6 +465,8 @@ final class LiveAudioTranscriptionPipeline: ObservableObject {
 
 private struct SourceTranscriptionOutput: Sendable {
     let result: TranscriptionResult
+    let normalizedSamples: [Float]
+    let normalizedSampleRate: Double
     let elapsed: Double
     let errorMessage: String?
 }
