@@ -16,6 +16,7 @@ struct ContentView: View {
     @StateObject private var hearing = HearingDemoPipeline()
     @StateObject private var computerHearing = LiveAudioTranscriptionPipeline.computer()
     @StateObject private var microphoneHearing = LiveAudioTranscriptionPipeline.microphone()
+    @StateObject private var duplicateAnalyzer = TranscriptDuplicateAnalyzer()
     @StateObject private var audioInputDevices = AudioInputDevicePickerViewModel()
     @State private var hearingMode: TranscriptionMode = .transcribeOriginalLanguage
     @State private var permissionSnapshot: PermissionSnapshot?
@@ -216,6 +217,18 @@ struct ContentView: View {
             await refreshPermissions()
             audioInputDevices.refresh()
             microphoneHearing.setInputDeviceID(audioInputDevices.selectedDeviceID)
+
+            let analyzer = duplicateAnalyzer
+            computerHearing.setChunkHook { [weak analyzer] event in
+                Task { @MainActor in
+                    analyzer?.ingest(event)
+                }
+            }
+            microphoneHearing.setChunkHook { [weak analyzer] event in
+                Task { @MainActor in
+                    analyzer?.ingest(event)
+                }
+            }
         }
     }
 
@@ -300,7 +313,8 @@ struct ContentView: View {
                 microphoneHearing.transcriptSource
             ],
             chunks: computerHearing.transcript.chunks
-                + microphoneHearing.transcript.chunks
+                + microphoneHearing.transcript.chunks,
+            annotations: duplicateAnalyzer.annotations
         )
     }
 
@@ -321,6 +335,7 @@ struct ContentView: View {
 
         computerHearing.clearTranscript()
         microphoneHearing.clearTranscript()
+        duplicateAnalyzer.reset()
     }
 
     private var hearingDemoSection: some View {
@@ -426,7 +441,7 @@ struct ContentView: View {
                         .font(.headline)
                     Spacer()
                     if hasLiveTranscriptText {
-                        Text("Computer \(computerHearing.transcript.chunksTranscribed) | Mic \(microphoneHearing.transcript.chunksTranscribed)")
+                        Text("Computer \(computerHearing.transcript.chunksTranscribed) | Mic \(microphoneHearing.transcript.chunksTranscribed) | Dups \(duplicateAnalyzer.annotations.count)")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
