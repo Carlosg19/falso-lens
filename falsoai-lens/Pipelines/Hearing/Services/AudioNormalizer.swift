@@ -22,6 +22,7 @@ actor AudioNormalizer {
         )
 
         return NormalizedAudioChunk(
+            source: chunk.source,
             sequenceNumber: chunk.sequenceNumber,
             startFrame: chunk.startFrame,
             samples: normalizedSamples,

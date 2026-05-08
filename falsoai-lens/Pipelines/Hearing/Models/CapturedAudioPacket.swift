@@ -1,6 +1,6 @@
 import Foundation
 
-enum CapturedAudioSource: String, Sendable, Equatable {
+enum CapturedAudioSource: String, Sendable, Equatable, Codable {
     case computer
     case microphone
 }

@@ -68,17 +68,21 @@ struct ComputerMicrophoneAudioCaptureConfiguration: Sendable, Equatable {
 final class ComputerMicrophoneAudioCaptureService {
     private let logger: Logger
     private let sampleHandlerQueue = DispatchQueue(label: "com.falsoai.lens.mixed-audio-capture")
+    private let microphoneCaptureService: AudioCaptureService
     private var stream: SCStream?
     private var streamOutput: ComputerMicrophoneAudioStreamOutput?
+    private var microphoneTask: Task<Void, Never>?
 
     private(set) var isRunning = false
 
     init(
+        microphoneCaptureService: AudioCaptureService? = nil,
         logger: Logger = Logger(
             subsystem: Bundle.main.bundleIdentifier ?? "com.falsoai.FalsoaiLens",
             category: "MixedAudioCapture"
         )
     ) {
+        self.microphoneCaptureService = microphoneCaptureService ?? AudioCaptureService()
         self.logger = logger
     }
 
@@ -108,10 +112,11 @@ final class ComputerMicrophoneAudioCaptureService {
         let streamConfiguration = SCStreamConfiguration()
         streamConfiguration.width = max(display.width, 2)
         streamConfiguration.height = max(display.height, 2)
+        streamConfiguration.minimumFrameInterval = CMTime(value: 1, timescale: 1)
         streamConfiguration.queueDepth = 3
         streamConfiguration.showsCursor = false
         streamConfiguration.capturesAudio = true
-        streamConfiguration.captureMicrophone = true
+        streamConfiguration.captureMicrophone = false
         streamConfiguration.sampleRate = configuration.sampleRate
         streamConfiguration.channelCount = configuration.channelCount
         streamConfiguration.excludesCurrentProcessAudio = configuration.excludesCurrentProcessAudio
@@ -129,11 +134,35 @@ final class ComputerMicrophoneAudioCaptureService {
         )
         try stream.addStreamOutput(
             streamOutput,
-            type: .microphone,
+            type: .screen,
             sampleHandlerQueue: sampleHandlerQueue
         )
 
         try await stream.startCapture()
+
+        let microphoneStream: AsyncStream<CapturedAudioBuffer>
+        do {
+            microphoneStream = try microphoneCaptureService.startCapture()
+        } catch {
+            try? await stream.stopCapture()
+            try? stream.removeStreamOutput(streamOutput, type: .audio)
+            try? stream.removeStreamOutput(streamOutput, type: .screen)
+            streamPair.continuation.finish()
+            throw error
+        }
+
+        microphoneTask = Task(priority: .userInitiated) {
+            for await buffer in microphoneStream {
+                if Task.isCancelled { break }
+
+                streamPair.continuation.yield(
+                    CapturedAudioPacket(
+                        source: .microphone,
+                        buffer: buffer
+                    )
+                )
+            }
+        }
 
         self.stream = stream
         self.streamOutput = streamOutput
@@ -146,7 +175,7 @@ final class ComputerMicrophoneAudioCaptureService {
         }
 
         logger.info(
-            "Mixed audio capture started displayID=\(display.displayID, privacy: .public), sampleRate=\(configuration.sampleRate, privacy: .public), channels=\(configuration.channelCount, privacy: .public), excludesCurrentProcessAudio=\(configuration.excludesCurrentProcessAudio, privacy: .public)"
+            "Mixed audio capture started displayID=\(display.displayID, privacy: .public), computerSampleRate=\(configuration.sampleRate, privacy: .public), computerChannels=\(configuration.channelCount, privacy: .public), excludesCurrentProcessAudio=\(configuration.excludesCurrentProcessAudio, privacy: .public), microphoneProvider=AVAudioEngine"
         )
 
         return streamPair.stream
@@ -157,14 +186,19 @@ final class ComputerMicrophoneAudioCaptureService {
 
         let currentStream = stream
         let currentOutput = streamOutput
+        let currentMicrophoneTask = microphoneTask
         stream = nil
         streamOutput = nil
+        microphoneTask = nil
         isRunning = false
 
+        currentMicrophoneTask?.cancel()
+        microphoneCaptureService.stopCapture()
+
         if let currentStream, let currentOutput {
-            try? currentStream.removeStreamOutput(currentOutput, type: .audio)
-            try? currentStream.removeStreamOutput(currentOutput, type: .microphone)
             try? await currentStream.stopCapture()
+            try? currentStream.removeStreamOutput(currentOutput, type: .audio)
+            try? currentStream.removeStreamOutput(currentOutput, type: .screen)
         }
 
         currentOutput?.finish()
@@ -255,8 +289,33 @@ private nonisolated final class ComputerMicrophoneAudioStreamOutput: NSObject, S
         }
 
         let frameCount = CMSampleBufferGetNumSamples(sampleBuffer)
+        guard frameCount > 0 else {
+            return CapturedAudioBuffer(
+                samples: [],
+                sampleRate: streamDescription.mSampleRate,
+                channelCount: max(1, Int(streamDescription.mChannelsPerFrame)),
+                frameCount: 0,
+                hostTime: UInt64(CMTimeGetSeconds(CMSampleBufferGetPresentationTimeStamp(sampleBuffer)) * 1_000_000_000)
+            )
+        }
+
         let channelCount = max(1, Int(streamDescription.mChannelsPerFrame))
-        let maximumBuffers = max(1, channelCount)
+        var bufferListSizeNeeded = 0
+        let sizeStatus = CMSampleBufferGetAudioBufferListWithRetainedBlockBuffer(
+            sampleBuffer,
+            bufferListSizeNeededOut: &bufferListSizeNeeded,
+            bufferListOut: nil,
+            bufferListSize: 0,
+            blockBufferAllocator: kCFAllocatorDefault,
+            blockBufferMemoryAllocator: kCFAllocatorDefault,
+            flags: UInt32(kCMSampleBufferFlag_AudioBufferList_Assure16ByteAlignment),
+            blockBufferOut: nil
+        )
+        guard sizeStatus == noErr, bufferListSizeNeeded > 0 else {
+            throw ComputerMicrophoneAudioCaptureError.sampleBufferUnavailable(sizeStatus)
+        }
+
+        let maximumBuffers = maximumBufferCount(forAudioBufferListByteCount: bufferListSizeNeeded)
         let audioBufferList = AudioBufferList.allocate(maximumBuffers: maximumBuffers)
         defer { audioBufferList.unsafeMutablePointer.deallocate() }
 
@@ -290,6 +349,17 @@ private nonisolated final class ComputerMicrophoneAudioStreamOutput: NSObject, S
             frameCount: frameCount,
             hostTime: UInt64(CMTimeGetSeconds(CMSampleBufferGetPresentationTimeStamp(sampleBuffer)) * 1_000_000_000)
         )
+    }
+
+    private static func maximumBufferCount(forAudioBufferListByteCount byteCount: Int) -> Int {
+        let singleBufferByteCount = AudioBufferList.sizeInBytes(maximumBuffers: 1)
+        guard byteCount > singleBufferByteCount else { return 1 }
+
+        let additionalByteCount = byteCount - singleBufferByteCount
+        let additionalBuffers = Int(
+            (Double(additionalByteCount) / Double(MemoryLayout<AudioBuffer>.stride)).rounded(.up)
+        )
+        return 1 + max(0, additionalBuffers)
     }
 
     private static func copySamples(

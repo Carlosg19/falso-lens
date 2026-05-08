@@ -14,4 +14,13 @@ enum TranscriptionMode: Sendable, Equatable, CaseIterable, Identifiable {
             return "English (translate)"
         }
     }
+
+    var transcriptValue: String {
+        switch self {
+        case .transcribeOriginalLanguage:
+            return "transcribe_original_language"
+        case .translateToEnglish:
+            return "translate_to_english"
+        }
+    }
 }

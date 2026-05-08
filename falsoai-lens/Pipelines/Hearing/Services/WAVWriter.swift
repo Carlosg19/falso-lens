@@ -14,7 +14,7 @@ actor WAVWriter {
         )
 
         let fileURL = outputDirectory.appendingPathComponent(
-            String(format: "chunk-%04d.wav", chunk.sequenceNumber)
+            String(format: "%@-chunk-%04d.wav", chunk.source.rawValue, chunk.sequenceNumber)
         )
         let wavData = try Self.wavData(for: chunk)
         try wavData.write(to: fileURL, options: [.atomic])

@@ -1,6 +1,7 @@
 import Foundation
 
 struct NormalizedAudioChunk: Sendable, Equatable {
+    let source: CapturedAudioSource
     let sequenceNumber: Int
     let startFrame: Int64
     let samples: [Float]
@@ -21,6 +22,7 @@ struct NormalizedAudioChunk: Sendable, Equatable {
 
     nonisolated func withFileURL(_ fileURL: URL) -> NormalizedAudioChunk {
         NormalizedAudioChunk(
+            source: source,
             sequenceNumber: sequenceNumber,
             startFrame: startFrame,
             samples: samples,

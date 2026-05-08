@@ -1,6 +1,7 @@
 import Foundation
 
 struct BufferedAudioChunk: Sendable, Equatable {
+    let source: CapturedAudioSource
     let sequenceNumber: Int
     let startFrame: Int64
     let samples: [Float]

@@ -6,6 +6,7 @@
 //
 
 import AppKit
+import CoreAudio
 import SwiftData
 import SwiftUI
 import UniformTypeIdentifiers
@@ -13,7 +14,9 @@ import UniformTypeIdentifiers
 struct ContentView: View {
     @StateObject private var pipeline = DemoScanPipeline()
     @StateObject private var hearing = HearingDemoPipeline()
-    @StateObject private var liveHearing = LiveMixedAudioTranscriptionPipeline()
+    @StateObject private var computerHearing = LiveAudioTranscriptionPipeline.computer()
+    @StateObject private var microphoneHearing = LiveAudioTranscriptionPipeline.microphone()
+    @StateObject private var audioInputDevices = AudioInputDevicePickerViewModel()
     @State private var hearingMode: TranscriptionMode = .transcribeOriginalLanguage
     @State private var permissionSnapshot: PermissionSnapshot?
     @State private var permissionDebugSummary = "Permissions not checked yet"
@@ -59,159 +62,160 @@ struct ContentView: View {
                 }
             }
         } detail: {
-            VStack(alignment: .leading, spacing: 16) {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Realtime Manipulation Demo")
-                        .font(.title)
-                    Text("Paste text or capture the main display to exercise screen recording, OCR, analysis, storage, and notifications.")
-                        .foregroundStyle(.secondary)
-                }
-
-                TextEditor(text: $demoText)
-                    .font(.body)
-                    .frame(minHeight: 140)
-                    .padding(6)
-                    .overlay {
-                        RoundedRectangle(cornerRadius: 6)
-                            .stroke(Color.secondary.opacity(0.25), lineWidth: 1)
-                    }
-
-                HStack {
-                    Button {
-                        Task { await pipeline.scan(text: demoText) }
-                    } label: {
-                        Label(pipeline.isScanning ? "Scanning" : "Run Demo Scan", systemImage: "viewfinder")
-                    }
-                    .disabled(pipeline.isScanning)
-
-                    Button {
-                        Task { await pipeline.captureScreenOCRAndScan() }
-                    } label: {
-                        Label(
-                            pipeline.isCapturingScreen ? "Capturing" : "Capture Screen + OCR",
-                            systemImage: "text.viewfinder"
-                        )
-                    }
-                    .disabled(pipeline.isCapturingScreen || pipeline.isScanning)
-
-                    Button("Request Screen Recording") {
-                        let granted = permissionManager.requestScreenRecordingPermission()
-                        lastPermissionAction = "Screen recording request returned \(granted). If you just granted access, quit and reopen the app."
-                        Task { await refreshPermissions() }
-                    }
-                }
-
-                Text(pipeline.captureStatus)
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-
-                Text(permissionDebugSummary)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .textSelection(.enabled)
-
-                Text(lastPermissionAction)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .textSelection(.enabled)
-
-                if let runtimePermissionIdentity {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
                     VStack(alignment: .leading, spacing: 4) {
-                        Text("Permission Identity")
-                            .font(.headline)
-                        Text(runtimePermissionIdentity.expandedSummary)
-                            .font(.caption)
+                        Text("Realtime Manipulation Demo")
+                            .font(.title)
+                        Text("Paste text or capture the main display to exercise screen recording, OCR, analysis, storage, and notifications.")
                             .foregroundStyle(.secondary)
-                            .textSelection(.enabled)
-                        Text("Reset: \(runtimePermissionIdentity.tccResetCommand)")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .textSelection(.enabled)
-                        Text("Reset all ScreenCapture: \(runtimePermissionIdentity.tccResetAllCommand)")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .textSelection(.enabled)
-                        Text(runtimePermissionIdentity.screenRecordingDiagnosis)
-                            .font(.caption)
-                            .foregroundStyle(.orange)
-                            .textSelection(.enabled)
                     }
-                    .padding()
-                    .background(.thinMaterial)
-                    .clipShape(RoundedRectangle(cornerRadius: 8))
-                }
 
-                HStack {
-                    Button("Request Notifications") {
-                        Task {
-                            let granted = (try? await notificationService.requestAuthorization()) ?? false
-                            lastPermissionAction = "Notifications request returned \(granted)."
-                            await refreshPermissions()
+                    TextEditor(text: $demoText)
+                        .font(.body)
+                        .frame(minHeight: 140)
+                        .padding(6)
+                        .overlay {
+                            RoundedRectangle(cornerRadius: 6)
+                                .stroke(Color.secondary.opacity(0.25), lineWidth: 1)
+                        }
+
+                    HStack {
+                        Button {
+                            Task { await pipeline.scan(text: demoText) }
+                        } label: {
+                            Label(pipeline.isScanning ? "Scanning" : "Run Demo Scan", systemImage: "viewfinder")
+                        }
+                        .disabled(pipeline.isScanning)
+
+                        Button {
+                            Task { await pipeline.captureScreenOCRAndScan() }
+                        } label: {
+                            Label(
+                                pipeline.isCapturingScreen ? "Capturing" : "Capture Screen + OCR",
+                                systemImage: "text.viewfinder"
+                            )
+                        }
+                        .disabled(pipeline.isCapturingScreen || pipeline.isScanning)
+
+                        Button("Request Screen Recording") {
+                            let granted = permissionManager.requestScreenRecordingPermission()
+                            lastPermissionAction = "Screen recording request returned \(granted). If you just granted access, quit and reopen the app."
+                            Task { await refreshPermissions() }
                         }
                     }
 
-                    Button("Request Accessibility") {
-                        let status = permissionManager.accessibilityStatus(prompt: true)
-                        lastPermissionAction = "Accessibility prompt returned \(label(for: status))."
-                        Task { await refreshPermissions() }
-                    }
+                    Text(pipeline.captureStatus)
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
 
-                    Button("Request Microphone") {
-                        Task {
-                            let granted = await permissionManager.requestMicrophoneAccess()
-                            lastPermissionAction = "Microphone request returned \(granted)."
-                            await refreshPermissions()
-                        }
-                    }
-                }
+                    Text(permissionDebugSummary)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
 
-                if !pipeline.lastOCRText.isEmpty {
-                    VStack(alignment: .leading, spacing: 8) {
-                        HStack {
-                            Text("Last OCR Capture")
+                    Text(lastPermissionAction)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+
+                    if let runtimePermissionIdentity {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Permission Identity")
                                 .font(.headline)
-                            Spacer()
-                            Text("\(pipeline.lastOCRText.count) chars")
+                            Text(runtimePermissionIdentity.expandedSummary)
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
-                        }
-                        ScrollView {
-                            Text(pipeline.lastOCRText)
-                                .font(.system(.body, design: .monospaced))
                                 .textSelection(.enabled)
-                                .foregroundStyle(.primary)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .padding(8)
+                            Text("Reset: \(runtimePermissionIdentity.tccResetCommand)")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .textSelection(.enabled)
+                            Text("Reset all ScreenCapture: \(runtimePermissionIdentity.tccResetAllCommand)")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .textSelection(.enabled)
+                            Text(runtimePermissionIdentity.screenRecordingDiagnosis)
+                                .font(.caption)
+                                .foregroundStyle(.orange)
+                                .textSelection(.enabled)
                         }
-                        .frame(minHeight: 320, maxHeight: .infinity)
-                        .background(Color(nsColor: .textBackgroundColor))
-                        .clipShape(RoundedRectangle(cornerRadius: 6))
+                        .padding()
+                        .background(.thinMaterial)
+                        .clipShape(RoundedRectangle(cornerRadius: 8))
                     }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-                    .padding()
-                    .background(.thinMaterial)
-                    .clipShape(RoundedRectangle(cornerRadius: 8))
-                }
 
-                if let errorMessage = pipeline.errorMessage {
-                    Text(errorMessage)
-                        .foregroundStyle(.red)
-                }
+                    HStack {
+                        Button("Request Notifications") {
+                            Task {
+                                let granted = (try? await notificationService.requestAuthorization()) ?? false
+                                lastPermissionAction = "Notifications request returned \(granted)."
+                                await refreshPermissions()
+                            }
+                        }
 
-                if let result = pipeline.latestResult {
-                    resultView(result)
-                }
+                        Button("Request Accessibility") {
+                            let status = permissionManager.accessibilityStatus(prompt: true)
+                            lastPermissionAction = "Accessibility prompt returned \(label(for: status))."
+                            Task { await refreshPermissions() }
+                        }
 
-                hearingDemoSection
+                        Button("Request Microphone") {
+                            Task {
+                                let granted = await permissionManager.requestMicrophoneAccess()
+                                lastPermissionAction = "Microphone request returned \(granted)."
+                                await refreshPermissions()
+                            }
+                        }
+                    }
 
-                if pipeline.lastOCRText.isEmpty {
-                    Spacer()
+                    if !pipeline.lastOCRText.isEmpty {
+                        VStack(alignment: .leading, spacing: 8) {
+                            HStack {
+                                Text("Last OCR Capture")
+                                    .font(.headline)
+                                Spacer()
+                                Text("\(pipeline.lastOCRText.count) chars")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            ScrollView {
+                                Text(pipeline.lastOCRText)
+                                    .font(.system(.body, design: .monospaced))
+                                    .textSelection(.enabled)
+                                    .foregroundStyle(.primary)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .padding(8)
+                            }
+                            .frame(minHeight: 240, maxHeight: 420)
+                            .background(Color(nsColor: .textBackgroundColor))
+                            .clipShape(RoundedRectangle(cornerRadius: 6))
+                        }
+                        .frame(maxWidth: .infinity, alignment: .topLeading)
+                        .padding()
+                        .background(.thinMaterial)
+                        .clipShape(RoundedRectangle(cornerRadius: 8))
+                    }
+
+                    if let errorMessage = pipeline.errorMessage {
+                        Text(errorMessage)
+                            .foregroundStyle(.red)
+                    }
+
+                    if let result = pipeline.latestResult {
+                        resultView(result)
+                    }
+
+                    hearingDemoSection
                 }
+                .frame(maxWidth: .infinity, alignment: .topLeading)
+                .padding()
             }
-            .padding()
         }
         .task {
             await refreshPermissions()
+            audioInputDevices.refresh()
+            microphoneHearing.setInputDeviceID(audioInputDevices.selectedDeviceID)
         }
     }
 
@@ -264,6 +268,59 @@ struct ContentView: View {
         .padding()
         .background(.thinMaterial)
         .clipShape(RoundedRectangle(cornerRadius: 8))
+    }
+
+    private var isLiveAudioRunning: Bool {
+        computerHearing.isRunning || microphoneHearing.isRunning
+    }
+
+    private var isLiveAudioProcessing: Bool {
+        computerHearing.isProcessingChunk || microphoneHearing.isProcessingChunk
+    }
+
+    private var isLiveAudioAvailable: Bool {
+        computerHearing.isAvailable || microphoneHearing.isAvailable
+    }
+
+    private var hasLiveTranscriptText: Bool {
+        computerHearing.hasTranscriptText || microphoneHearing.hasTranscriptText
+    }
+
+    private var hasLiveAudioError: Bool {
+        computerHearing.errorMessage != nil || microphoneHearing.errorMessage != nil
+    }
+
+    private var liveTranscriptDocument: SourceSeparatedAudioTranscript {
+        SourceSeparatedAudioTranscript(
+            language: microphoneHearing.transcript.latestLanguage
+                ?? computerHearing.transcript.latestLanguage,
+            mode: hearingMode,
+            sources: [
+                computerHearing.transcriptSource,
+                microphoneHearing.transcriptSource
+            ],
+            chunks: computerHearing.transcript.chunks
+                + microphoneHearing.transcript.chunks
+        )
+    }
+
+    private func startLiveAudioPipelines() async {
+        await computerHearing.start(mode: hearingMode)
+        await microphoneHearing.start(mode: hearingMode)
+    }
+
+    private func stopLiveAudioPipelines() async {
+        await computerHearing.stop()
+        await microphoneHearing.stop()
+    }
+
+    private func clearLiveAudioTranscripts() {
+        #if DEBUG
+        _ = liveTranscriptDocument
+        #endif
+
+        computerHearing.clearTranscript()
+        microphoneHearing.clearTranscript()
     }
 
     private var hearingDemoSection: some View {
@@ -363,84 +420,124 @@ struct ContentView: View {
 
             Divider()
 
-            VStack(alignment: .leading, spacing: 10) {
-                Text("Computer + Mic Live")
-                    .font(.headline)
+            VStack(alignment: .leading, spacing: 12) {
+                HStack {
+                    Label("Independent Live Audio", systemImage: "waveform.and.person.filled")
+                        .font(.headline)
+                    Spacer()
+                    if hasLiveTranscriptText {
+                        Text("Computer \(computerHearing.transcript.chunksTranscribed) | Mic \(microphoneHearing.transcript.chunksTranscribed)")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
+                HStack {
+                    Picker("Microphone Input", selection: $audioInputDevices.selectedDeviceID) {
+                        Text("System Default").tag(AudioDeviceID?.none)
+                        ForEach(audioInputDevices.devices) { device in
+                            Text(device.isDefault ? "\(device.displayName) (Default)" : device.displayName)
+                                .tag(Optional(device.id))
+                        }
+                    }
+                    .frame(maxWidth: 360)
+                    .disabled(isLiveAudioRunning)
+                    .onChange(of: audioInputDevices.selectedDeviceID) { _, newValue in
+                        microphoneHearing.setInputDeviceID(newValue)
+                    }
+
+                    Button {
+                        audioInputDevices.refresh()
+                        microphoneHearing.setInputDeviceID(audioInputDevices.selectedDeviceID)
+                    } label: {
+                        Label("Refresh Inputs", systemImage: "arrow.clockwise")
+                    }
+                    .disabled(isLiveAudioRunning)
+                }
 
                 HStack {
                     Button {
                         Task {
-                            if liveHearing.isRunning {
-                                await liveHearing.stop()
+                            if isLiveAudioRunning {
+                                await stopLiveAudioPipelines()
                             } else {
-                                await liveHearing.start(mode: hearingMode)
+                                await startLiveAudioPipelines()
                             }
                         }
                     } label: {
                         Label(
-                            liveHearing.isRunning ? "Stop" : "Start Computer + Mic",
-                            systemImage: liveHearing.isRunning ? "stop.circle" : "record.circle"
+                            isLiveAudioRunning ? "Stop Capture" : "Start Capture",
+                            systemImage: isLiveAudioRunning ? "stop.circle" : "record.circle"
                         )
                     }
-                    .disabled(!liveHearing.isEngineAvailable && !liveHearing.isRunning)
+                    .disabled(!isLiveAudioAvailable && !isLiveAudioRunning)
 
                     Button {
-                        liveHearing.clearTranscript()
+                        clearLiveAudioTranscripts()
                     } label: {
-                        Label("Clear", systemImage: "trash")
+                        Label("Clear Both", systemImage: "trash")
                     }
-                    .disabled(liveHearing.transcriptText.isEmpty && liveHearing.errorMessage == nil)
-
-                    Button {
-                        copyToPasteboard(liveHearing.transcriptText)
-                    } label: {
-                        Label("Copy", systemImage: "doc.on.doc")
-                    }
-                    .disabled(liveHearing.transcriptText.isEmpty)
+                    .disabled(!hasLiveTranscriptText && !hasLiveAudioError)
                 }
 
-                HStack(spacing: 12) {
-                    Label(liveHearing.statusText, systemImage: liveHearing.isRunning ? "waveform" : "waveform.slash")
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
+                HStack(alignment: .top, spacing: 10) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Label(
+                            computerHearing.statusText,
+                            systemImage: computerHearing.isRunning ? "desktopcomputer" : "waveform.slash"
+                        )
+                        Label(
+                            microphoneHearing.statusText,
+                            systemImage: microphoneHearing.isRunning ? "mic" : "waveform.slash"
+                        )
+                    }
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
 
-                    if liveHearing.isProcessingChunk {
+                    if isLiveAudioProcessing {
                         ProgressView()
                             .controlSize(.small)
                     }
                 }
 
-                HStack(spacing: 12) {
-                    if liveHearing.chunksTranscribed > 0 {
-                        Text("Chunks: \(liveHearing.chunksTranscribed)")
+                VStack(alignment: .leading, spacing: 14) {
+                    liveTranscriptPanel(
+                        title: "Computer Audio",
+                        subtitle: "System audio captured from the selected display",
+                        systemImage: "desktopcomputer",
+                        state: computerHearing.transcript,
+                        accent: .blue
+                    ) {
+                        copyToPasteboard(computerHearing.transcript.text)
                     }
 
-                    if let elapsed = liveHearing.lastInferenceDurationSeconds {
-                        Text(String(format: "Last inference: %.2f s", elapsed))
-                    }
-
-                    if let language = liveHearing.latestLanguage {
-                        Text("Language: \(language)")
+                    liveTranscriptPanel(
+                        title: "Microphone",
+                        subtitle: "External input captured from the active microphone",
+                        systemImage: "mic",
+                        state: microphoneHearing.transcript,
+                        accent: .green
+                    ) {
+                        copyToPasteboard(microphoneHearing.transcript.text)
                     }
                 }
-                .font(.caption)
-                .foregroundStyle(.secondary)
 
-                if !liveHearing.transcriptText.isEmpty {
-                    ScrollView {
-                        Text(liveHearing.transcriptText)
-                            .font(.body)
-                            .textSelection(.enabled)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(8)
-                    }
-                    .frame(minHeight: 120, maxHeight: 220)
-                    .background(Color(nsColor: .textBackgroundColor))
-                    .clipShape(RoundedRectangle(cornerRadius: 6))
+                if let computerError = computerHearing.errorMessage {
+                    Text("Computer audio: \(computerError)")
+                        .font(.callout)
+                        .foregroundStyle(.red)
+                        .textSelection(.enabled)
                 }
 
-                if let liveError = liveHearing.errorMessage {
-                    Text(liveError)
+                if let microphoneError = microphoneHearing.errorMessage {
+                    Text("Microphone: \(microphoneError)")
+                        .font(.callout)
+                        .foregroundStyle(.red)
+                        .textSelection(.enabled)
+                }
+
+                if let inputDeviceError = audioInputDevices.errorMessage {
+                    Text("Audio inputs: \(inputDeviceError)")
                         .font(.callout)
                         .foregroundStyle(.red)
                         .textSelection(.enabled)
@@ -469,10 +566,151 @@ struct ContentView: View {
         NSPasteboard.general.setString(text, forType: .string)
     }
 
+    private func liveTranscriptPanel(
+        title: String,
+        subtitle: String,
+        systemImage: String,
+        state: SourceTranscriptState,
+        accent: Color,
+        copyAction: @escaping () -> Void
+    ) -> some View {
+        #if DEBUG
+        if title == "Computer Audio" {
+            assert(state.source == .computer, "Computer panel must receive computer transcript state")
+        }
+        if title == "Microphone" {
+            assert(state.source == .microphone, "Microphone panel must receive microphone transcript state")
+        }
+        #endif
+
+        return VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .firstTextBaseline) {
+                Label(title, systemImage: systemImage)
+                    .font(.headline)
+                    .foregroundStyle(accent)
+                Spacer()
+
+                Button {
+                    copyAction()
+                } label: {
+                    Label("Copy", systemImage: "doc.on.doc")
+                }
+                .disabled(state.isEmpty)
+            }
+
+            Text(subtitle)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            ScrollView {
+                Text(state.isEmpty ? "No transcript yet" : state.text)
+                    .font(.body)
+                    .foregroundStyle(state.isEmpty ? .secondary : .primary)
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(10)
+            }
+            .frame(minHeight: 150, maxHeight: 260)
+            .background(Color(nsColor: .textBackgroundColor))
+            .overlay(alignment: .leading) {
+                Rectangle()
+                    .fill(accent)
+                    .frame(width: 3)
+            }
+            .clipShape(RoundedRectangle(cornerRadius: 6))
+
+            HStack(spacing: 12) {
+                Label("\(state.chunksTranscribed) chunks", systemImage: "waveform")
+                if let elapsed = state.lastInferenceDurationSeconds {
+                    Label(String(format: "%.2f s", elapsed), systemImage: "timer")
+                }
+                if let language = state.latestLanguage {
+                    Label(language, systemImage: "globe")
+                }
+            }
+            .font(.caption)
+            .foregroundStyle(.secondary)
+
+            Divider()
+
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Chunk Objects")
+                    .font(.subheadline.weight(.semibold))
+
+                if state.chunks.isEmpty {
+                    Text("No chunks yet")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.vertical, 4)
+                } else {
+                    ScrollView {
+                        LazyVStack(alignment: .leading, spacing: 0) {
+                            ForEach(state.chunks) { chunk in
+                                chunkObjectRow(chunk)
+
+                                if chunk.id != state.chunks.last?.id {
+                                    Divider()
+                                }
+                            }
+                        }
+                    }
+                    .frame(minHeight: 120, maxHeight: 240)
+                    .background(Color(nsColor: .textBackgroundColor))
+                    .clipShape(RoundedRectangle(cornerRadius: 6))
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .topLeading)
+        .padding(12)
+        .overlay {
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(accent.opacity(0.35), lineWidth: 1)
+        }
+    }
+
+    private func chunkObjectRow(_ chunk: SourceTranscriptChunk) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .firstTextBaseline) {
+                Text(chunk.chunkID)
+                    .font(.system(.caption, design: .monospaced).weight(.semibold))
+                Spacer()
+                Text(chunk.source.displayName)
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(.secondary)
+            }
+
+            HStack(spacing: 10) {
+                Label(formatRange(start: chunk.startTime, end: chunk.endTime), systemImage: "clock")
+                Label(formatDuration(chunk.duration), systemImage: "timer")
+                Text("seq \(chunk.sequenceNumber)")
+            }
+            .font(.caption)
+            .foregroundStyle(.secondary)
+
+            if let language = chunk.language {
+                Text("language: \(language)")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Text(chunk.text)
+                .font(.callout)
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
     private func formatRange(start: TimeInterval?, end: TimeInterval?) -> String {
         let startText = formatTimestamp(start) ?? "--:--.--"
         let endText = formatTimestamp(end) ?? "--:--.--"
         return "[\(startText) → \(endText)]"
+    }
+
+    private func formatDuration(_ seconds: TimeInterval) -> String {
+        String(format: "%.2f s", seconds)
     }
 
     private func formatTimestamp(_ seconds: TimeInterval?) -> String? {

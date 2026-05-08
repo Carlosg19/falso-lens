@@ -39,8 +39,8 @@ final class HearingDemoPipeline: ObservableObject {
         #if DEBUG
         WhisperCppEngine.runParserSmokeCheck()
         RMSVoiceActivityDetector.runVADSmokeCheck()
-        MixedAudioBufferStore.runMixerSmokeCheck()
-        LiveMixedAudioTranscriptionPipeline.runStateSmokeCheck()
+        MixedAudioBufferStore.runSeparatedSourceSmokeCheck()
+        LiveAudioTranscriptionPipeline.runStateSmokeCheck()
         #endif
     }
 

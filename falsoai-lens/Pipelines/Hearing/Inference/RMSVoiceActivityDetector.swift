@@ -5,18 +5,31 @@ import OSLog
 struct RMSVoiceActivityDetectorConfiguration: Sendable, Equatable {
     var windowDurationSeconds: TimeInterval
     var thresholdDBFS: Double
+    var adaptiveNoiseFloorMarginDB: Double
+    var minimumAdaptiveThresholdDBFS: Double
     var paddingSeconds: TimeInterval
     var minimumVoicedDurationSeconds: TimeInterval
 
     nonisolated static let `default` = RMSVoiceActivityDetectorConfiguration(
         windowDurationSeconds: HearingDependencies.vadWindowDurationSeconds,
         thresholdDBFS: HearingDependencies.vadThresholdDBFS,
+        adaptiveNoiseFloorMarginDB: HearingDependencies.vadAdaptiveNoiseFloorMarginDB,
+        minimumAdaptiveThresholdDBFS: HearingDependencies.vadMinimumAdaptiveThresholdDBFS,
         paddingSeconds: HearingDependencies.vadPaddingSeconds,
         minimumVoicedDurationSeconds: HearingDependencies.vadMinimumVoicedDurationSeconds
     )
 }
 
 actor RMSVoiceActivityDetector: VoiceActivityDetector {
+    private struct VoiceActivityAnalysis {
+        let trimRange: Range<Int>?
+        let effectiveThresholdDBFS: Double
+        let noiseFloorDBFS: Double
+        let maxWindowDBFS: Double
+        let meanWindowDBFS: Double
+        let windowCount: Int
+    }
+
     private let configuration: RMSVoiceActivityDetectorConfiguration
     private let logger: Logger
 
@@ -87,12 +100,16 @@ actor RMSVoiceActivityDetector: VoiceActivityDetector {
 
         let sampleCount = Int(buffer.frameLength)
         let samples = Array(UnsafeBufferPointer(start: channelData, count: sampleCount))
-        guard let trimRange = Self.trimRange(
+        let analysis = Self.analyze(
             for: samples,
             sampleRate: format.sampleRate,
             configuration: configuration
-        ) else {
-            logger?.info("vad.noVoice inputDurationSeconds=\(Double(sampleCount) / format.sampleRate, privacy: .public)")
+        )
+
+        guard let trimRange = analysis.trimRange else {
+            logger?.info(
+                "vad.noVoice inputDurationSeconds=\(Double(sampleCount) / format.sampleRate, privacy: .public), windowCount=\(analysis.windowCount, privacy: .public), effectiveThresholdDBFS=\(analysis.effectiveThresholdDBFS, privacy: .public), noiseFloorDBFS=\(analysis.noiseFloorDBFS, privacy: .public), maxWindowDBFS=\(analysis.maxWindowDBFS, privacy: .public), meanWindowDBFS=\(analysis.meanWindowDBFS, privacy: .public)"
+            )
             return nil
         }
 
@@ -113,7 +130,7 @@ actor RMSVoiceActivityDetector: VoiceActivityDetector {
         let inputDuration = Double(sampleCount) / format.sampleRate
         let outputDuration = Double(trimmedSamples.count) / format.sampleRate
         logger?.info(
-            "vad.trimmed inputDurationSeconds=\(inputDuration, privacy: .public), outputDurationSeconds=\(outputDuration, privacy: .public), voicedRatio=\(outputDuration / max(inputDuration, 0.001), privacy: .public), startSample=\(trimRange.lowerBound, privacy: .public), endSample=\(trimRange.upperBound, privacy: .public)"
+            "vad.trimmed inputDurationSeconds=\(inputDuration, privacy: .public), outputDurationSeconds=\(outputDuration, privacy: .public), voicedRatio=\(outputDuration / max(inputDuration, 0.001), privacy: .public), startSample=\(trimRange.lowerBound, privacy: .public), endSample=\(trimRange.upperBound, privacy: .public), effectiveThresholdDBFS=\(analysis.effectiveThresholdDBFS, privacy: .public), noiseFloorDBFS=\(analysis.noiseFloorDBFS, privacy: .public), maxWindowDBFS=\(analysis.maxWindowDBFS, privacy: .public)"
         )
 
         return trimmedURL
@@ -124,20 +141,70 @@ actor RMSVoiceActivityDetector: VoiceActivityDetector {
         sampleRate: Double,
         configuration: RMSVoiceActivityDetectorConfiguration
     ) -> Range<Int>? {
-        guard !samples.isEmpty, sampleRate > 0 else { return nil }
+        analyze(
+            for: samples,
+            sampleRate: sampleRate,
+            configuration: configuration
+        ).trimRange
+    }
+
+    private nonisolated static func analyze(
+        for samples: [Float],
+        sampleRate: Double,
+        configuration: RMSVoiceActivityDetectorConfiguration
+    ) -> VoiceActivityAnalysis {
+        guard !samples.isEmpty, sampleRate > 0 else {
+            return VoiceActivityAnalysis(
+                trimRange: nil,
+                effectiveThresholdDBFS: configuration.thresholdDBFS,
+                noiseFloorDBFS: -200,
+                maxWindowDBFS: -200,
+                meanWindowDBFS: -200,
+                windowCount: 0
+            )
+        }
 
         let windowSamples = max(1, Int((configuration.windowDurationSeconds * sampleRate).rounded(.toNearestOrAwayFromZero)))
         let windowCount = samples.count / windowSamples
-        guard windowCount > 0 else { return nil }
+        guard windowCount > 0 else {
+            return VoiceActivityAnalysis(
+                trimRange: nil,
+                effectiveThresholdDBFS: configuration.thresholdDBFS,
+                noiseFloorDBFS: -200,
+                maxWindowDBFS: -200,
+                meanWindowDBFS: -200,
+                windowCount: 0
+            )
+        }
 
-        var firstVoicedWindow: Int?
-        var lastVoicedWindow: Int?
+        var windowLevels: [Double] = []
+        windowLevels.reserveCapacity(windowCount)
 
         for windowIndex in 0..<windowCount {
             let start = windowIndex * windowSamples
             let end = start + windowSamples
-            let dbfs = rmsDBFS(samples[start..<end])
-            guard dbfs >= configuration.thresholdDBFS else { continue }
+            windowLevels.append(rmsDBFS(samples[start..<end]))
+        }
+
+        let sortedWindowLevels = windowLevels.sorted()
+        let noiseFloorIndex = min(
+            sortedWindowLevels.count - 1,
+            max(0, Int((Double(sortedWindowLevels.count - 1) * 0.20).rounded(.down)))
+        )
+        let noiseFloorDBFS = sortedWindowLevels[noiseFloorIndex]
+        let adaptiveThreshold = noiseFloorDBFS + configuration.adaptiveNoiseFloorMarginDB
+        let effectiveThresholdDBFS = max(
+            configuration.minimumAdaptiveThresholdDBFS,
+            min(configuration.thresholdDBFS, adaptiveThreshold)
+        )
+        let maxWindowDBFS = windowLevels.max() ?? -200
+        let meanWindowDBFS = windowLevels.reduce(0, +) / Double(windowLevels.count)
+
+        var firstVoicedWindow: Int?
+        var lastVoicedWindow: Int?
+
+        for (windowIndex, dbfs) in windowLevels.enumerated() {
+            guard dbfs >= effectiveThresholdDBFS else { continue }
 
             if firstVoicedWindow == nil {
                 firstVoicedWindow = windowIndex
@@ -145,17 +212,52 @@ actor RMSVoiceActivityDetector: VoiceActivityDetector {
             lastVoicedWindow = windowIndex
         }
 
-        guard let firstVoicedWindow, let lastVoicedWindow else { return nil }
+        guard let firstVoicedWindow, let lastVoicedWindow else {
+            return VoiceActivityAnalysis(
+                trimRange: nil,
+                effectiveThresholdDBFS: effectiveThresholdDBFS,
+                noiseFloorDBFS: noiseFloorDBFS,
+                maxWindowDBFS: maxWindowDBFS,
+                meanWindowDBFS: meanWindowDBFS,
+                windowCount: windowCount
+            )
+        }
 
         let voicedDuration = Double(lastVoicedWindow - firstVoicedWindow + 1) * configuration.windowDurationSeconds
-        guard voicedDuration >= configuration.minimumVoicedDurationSeconds else { return nil }
+        guard voicedDuration >= configuration.minimumVoicedDurationSeconds else {
+            return VoiceActivityAnalysis(
+                trimRange: nil,
+                effectiveThresholdDBFS: effectiveThresholdDBFS,
+                noiseFloorDBFS: noiseFloorDBFS,
+                maxWindowDBFS: maxWindowDBFS,
+                meanWindowDBFS: meanWindowDBFS,
+                windowCount: windowCount
+            )
+        }
 
         let paddingSamples = max(0, Int((configuration.paddingSeconds * sampleRate).rounded(.toNearestOrAwayFromZero)))
         let startSample = max(0, firstVoicedWindow * windowSamples - paddingSamples)
         let endSample = min(samples.count, (lastVoicedWindow + 1) * windowSamples + paddingSamples)
 
-        guard startSample < endSample else { return nil }
-        return startSample..<endSample
+        guard startSample < endSample else {
+            return VoiceActivityAnalysis(
+                trimRange: nil,
+                effectiveThresholdDBFS: effectiveThresholdDBFS,
+                noiseFloorDBFS: noiseFloorDBFS,
+                maxWindowDBFS: maxWindowDBFS,
+                meanWindowDBFS: meanWindowDBFS,
+                windowCount: windowCount
+            )
+        }
+
+        return VoiceActivityAnalysis(
+            trimRange: startSample..<endSample,
+            effectiveThresholdDBFS: effectiveThresholdDBFS,
+            noiseFloorDBFS: noiseFloorDBFS,
+            maxWindowDBFS: maxWindowDBFS,
+            meanWindowDBFS: meanWindowDBFS,
+            windowCount: windowCount
+        )
     }
 
     #if DEBUG

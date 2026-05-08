@@ -5,11 +5,12 @@ actor AudioChunker {
     private let configuration: AudioChunkingConfiguration
 
     init(
-        bufferStore: AudioBufferStore = AudioBufferStore(),
+        source: CapturedAudioSource = .microphone,
+        bufferStore: AudioBufferStore? = nil,
         configuration: AudioChunkingConfiguration = .mvp
     ) throws {
         try configuration.validate()
-        self.bufferStore = bufferStore
+        self.bufferStore = bufferStore ?? AudioBufferStore(source: source)
         self.configuration = configuration
     }
 

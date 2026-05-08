@@ -23,11 +23,16 @@ enum AudioBufferStoreError: LocalizedError, Equatable {
 }
 
 actor AudioBufferStore {
+    private let source: CapturedAudioSource
     private var samples: [Float] = []
     private var sampleRate: Double?
     private var channelCount: Int?
     private var absoluteStartFrame: Int64 = 0
     private var nextChunkSequenceNumber = 0
+
+    init(source: CapturedAudioSource = .microphone) {
+        self.source = source
+    }
 
     var availableFrameCount: Int {
         guard let channelCount, channelCount > 0 else { return 0 }
@@ -91,6 +96,7 @@ actor AudioBufferStore {
         let chunkSampleCount = chunkFrameCount * channelCount
         let chunkSamples = Array(samples.prefix(chunkSampleCount))
         let chunk = BufferedAudioChunk(
+            source: source,
             sequenceNumber: nextChunkSequenceNumber,
             startFrame: absoluteStartFrame,
             samples: chunkSamples,

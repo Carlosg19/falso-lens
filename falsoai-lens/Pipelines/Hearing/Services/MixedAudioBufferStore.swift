@@ -38,12 +38,16 @@ struct MixedAudioBufferConfiguration: Sendable, Equatable {
 }
 
 actor MixedAudioBufferStore {
+    private struct SourceBufferState {
+        var samples: [Float] = []
+        var absoluteStartFrame: Int64 = 0
+        var nextChunkSequenceNumber = 0
+    }
+
     private let configuration: MixedAudioBufferConfiguration
     private let logger: Logger
-    private var computerSamples: [Float] = []
-    private var microphoneSamples: [Float] = []
-    private var absoluteStartFrame: Int64 = 0
-    private var nextChunkSequenceNumber = 0
+    private var computerState = SourceBufferState()
+    private var microphoneState = SourceBufferState()
 
     init(
         configuration: MixedAudioBufferConfiguration = .liveTranscription,
@@ -58,11 +62,11 @@ actor MixedAudioBufferStore {
     }
 
     var availableDuration: TimeInterval {
-        let availableFrames = max(computerSamples.count, microphoneSamples.count)
+        let availableFrames = max(computerState.samples.count, microphoneState.samples.count)
         return Double(availableFrames) / configuration.sampleRate
     }
 
-    func append(_ packet: CapturedAudioPacket) throws -> [BufferedAudioChunk] {
+    func append(_ packet: CapturedAudioPacket) throws -> [SeparatedAudioChunkBatch] {
         let monoSamples = try Self.normalizedMonoSamples(
             from: packet.buffer,
             source: packet.source,
@@ -71,33 +75,85 @@ actor MixedAudioBufferStore {
 
         switch packet.source {
         case .computer:
-            computerSamples.append(contentsOf: monoSamples)
+            computerState.samples.append(contentsOf: monoSamples)
         case .microphone:
-            microphoneSamples.append(contentsOf: monoSamples)
+            microphoneState.samples.append(contentsOf: monoSamples)
         }
 
         return try drainAvailableChunks()
     }
 
-    func drainAvailableChunks() throws -> [BufferedAudioChunk] {
-        var chunks: [BufferedAudioChunk] = []
+    func drainAvailableChunks() throws -> [SeparatedAudioChunkBatch] {
+        var batches: [SeparatedAudioChunkBatch] = []
 
-        while let chunk = try nextChunk() {
-            chunks.append(chunk)
+        while true {
+            let microphoneReady = hasChunkReady(in: microphoneState)
+            let computerReady = hasChunkReady(in: computerState)
+
+            if !microphoneReady, !computerReady {
+                break
+            }
+
+            if !microphoneReady, computerReady, !microphoneState.samples.isEmpty {
+                break
+            }
+
+            let nextSequenceNumber = min(
+                microphoneReady ? microphoneState.nextChunkSequenceNumber : Int.max,
+                computerReady ? computerState.nextChunkSequenceNumber : Int.max
+            )
+
+            let microphoneChunk = microphoneReady && microphoneState.nextChunkSequenceNumber == nextSequenceNumber
+                ? try nextChunk(for: .microphone)
+                : nil
+            let computerChunk = computerReady && computerState.nextChunkSequenceNumber == nextSequenceNumber
+                ? try nextChunk(for: .computer)
+                : nil
+
+            let batch = SeparatedAudioChunkBatch(
+                sequenceNumber: nextSequenceNumber,
+                microphone: microphoneChunk,
+                computer: computerChunk
+            )
+
+            if batch.isEmpty {
+                break
+            }
+
+            batches.append(batch)
         }
 
-        return chunks
+        return batches
     }
 
     func clear() {
-        computerSamples.removeAll(keepingCapacity: false)
-        microphoneSamples.removeAll(keepingCapacity: false)
-        absoluteStartFrame = 0
-        nextChunkSequenceNumber = 0
+        computerState = SourceBufferState()
+        microphoneState = SourceBufferState()
     }
 
-    private func nextChunk() throws -> BufferedAudioChunk? {
-        let chunkFrameCount = max(1, Int((configuration.chunkDuration * configuration.sampleRate).rounded(.toNearestOrAwayFromZero)))
+    private func nextChunk(for source: CapturedAudioSource) throws -> BufferedAudioChunk? {
+        let chunk: BufferedAudioChunk?
+        switch source {
+        case .computer:
+            chunk = try nextChunk(source: source, state: &computerState)
+        case .microphone:
+            chunk = try nextChunk(source: source, state: &microphoneState)
+        }
+
+        if let chunk {
+            logger.info(
+                "Separated chunk emitted source=\(source.rawValue, privacy: .public), sequence=\(chunk.sequenceNumber, privacy: .public), frames=\(chunk.frameCount, privacy: .public), remainingComputerFrames=\(self.computerState.samples.count, privacy: .public), remainingMicFrames=\(self.microphoneState.samples.count, privacy: .public)"
+            )
+        }
+
+        return chunk
+    }
+
+    private func nextChunk(
+        source: CapturedAudioSource,
+        state: inout SourceBufferState
+    ) throws -> BufferedAudioChunk? {
+        let chunkFrameCount = self.chunkFrameCount
         let overlapFrameCount = Int((configuration.overlapDuration * configuration.sampleRate).rounded(.toNearestOrAwayFromZero))
         guard overlapFrameCount < chunkFrameCount else {
             throw MixedAudioBufferStoreError.invalidConfiguration(
@@ -107,49 +163,43 @@ actor MixedAudioBufferStore {
             )
         }
 
-        let availableFrames = max(computerSamples.count, microphoneSamples.count)
-        guard availableFrames >= chunkFrameCount else {
+        guard state.samples.count >= chunkFrameCount else {
             return nil
         }
 
-        let mixedSamples = Self.mixMonoSamples(
-            computerSamples: computerSamples,
-            microphoneSamples: microphoneSamples,
-            frameCount: chunkFrameCount
-        )
+        let chunkSamples = Array(state.samples.prefix(chunkFrameCount))
 
         let chunk = BufferedAudioChunk(
-            sequenceNumber: nextChunkSequenceNumber,
-            startFrame: absoluteStartFrame,
-            samples: mixedSamples,
+            source: source,
+            sequenceNumber: state.nextChunkSequenceNumber,
+            startFrame: state.absoluteStartFrame,
+            samples: chunkSamples,
             sampleRate: configuration.sampleRate,
             channelCount: 1,
             frameCount: chunkFrameCount
         )
 
         let framesToRemove = chunkFrameCount - overlapFrameCount
-        removeFirstFrames(framesToRemove)
-        absoluteStartFrame += Int64(framesToRemove)
-        nextChunkSequenceNumber += 1
-
-        logger.info(
-            "Mixed chunk emitted sequence=\(chunk.sequenceNumber, privacy: .public), frames=\(chunk.frameCount, privacy: .public), remainingComputerFrames=\(self.computerSamples.count, privacy: .public), remainingMicFrames=\(self.microphoneSamples.count, privacy: .public)"
-        )
+        removeFirstFrames(framesToRemove, from: &state)
+        state.absoluteStartFrame += Int64(framesToRemove)
+        state.nextChunkSequenceNumber += 1
 
         return chunk
     }
 
-    private func removeFirstFrames(_ frameCount: Int) {
-        if computerSamples.count <= frameCount {
-            computerSamples.removeAll(keepingCapacity: true)
-        } else {
-            computerSamples.removeFirst(frameCount)
-        }
+    private var chunkFrameCount: Int {
+        max(1, Int((configuration.chunkDuration * configuration.sampleRate).rounded(.toNearestOrAwayFromZero)))
+    }
 
-        if microphoneSamples.count <= frameCount {
-            microphoneSamples.removeAll(keepingCapacity: true)
+    private func hasChunkReady(in state: SourceBufferState) -> Bool {
+        state.samples.count >= chunkFrameCount
+    }
+
+    private func removeFirstFrames(_ frameCount: Int, from state: inout SourceBufferState) {
+        if state.samples.count <= frameCount {
+            state.samples.removeAll(keepingCapacity: true)
         } else {
-            microphoneSamples.removeFirst(frameCount)
+            state.samples.removeFirst(frameCount)
         }
     }
 
@@ -241,44 +291,35 @@ actor MixedAudioBufferStore {
         return outputSamples
     }
 
-    private nonisolated static func mixMonoSamples(
-        computerSamples: [Float],
-        microphoneSamples: [Float],
-        frameCount: Int
-    ) -> [Float] {
-        var mixedSamples: [Float] = []
-        mixedSamples.reserveCapacity(frameCount)
-
-        for frameIndex in 0..<frameCount {
-            var total: Float = 0
-            var activeSourceCount: Float = 0
-
-            if frameIndex < computerSamples.count {
-                total += computerSamples[frameIndex]
-                activeSourceCount += 1
-            }
-
-            if frameIndex < microphoneSamples.count {
-                total += microphoneSamples[frameIndex]
-                activeSourceCount += 1
-            }
-
-            let mixedSample = activeSourceCount > 0 ? total / activeSourceCount : 0
-            mixedSamples.append(min(max(mixedSample, -1), 1))
-        }
-
-        return mixedSamples
-    }
-
     #if DEBUG
-    nonisolated static func runMixerSmokeCheck() {
-        let mixed = mixMonoSamples(
-            computerSamples: [0.2, 0.4, 0.6],
-            microphoneSamples: [0.6, 0.4],
+    nonisolated static func runSeparatedSourceSmokeCheck() {
+        let computerChunk = BufferedAudioChunk(
+            source: .computer,
+            sequenceNumber: 0,
+            startFrame: 0,
+            samples: [0.2, 0.4, 0.6],
+            sampleRate: 48_000,
+            channelCount: 1,
             frameCount: 3
         )
+        assert(
+            computerChunk.source == .computer && computerChunk.samples == [0.2, 0.4, 0.6],
+            "Computer chunks must preserve source identity and samples"
+        )
 
-        assert(mixed == [0.4, 0.4, 0.6], "Mixer smoke check produced \(mixed)")
+        let microphoneChunk = BufferedAudioChunk(
+            source: .microphone,
+            sequenceNumber: 0,
+            startFrame: 0,
+            samples: [0.6, 0.4],
+            sampleRate: 48_000,
+            channelCount: 1,
+            frameCount: 2
+        )
+        assert(
+            microphoneChunk.source == .microphone && microphoneChunk.samples == [0.6, 0.4],
+            "Microphone chunks must preserve source identity and samples"
+        )
     }
     #endif
 }
