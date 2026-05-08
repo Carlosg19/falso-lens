@@ -104,13 +104,15 @@ struct SourceSeparatedAudioTranscript: Sendable, Equatable, Codable {
     let timebase: String
     let sources: [TranscriptSource]
     let chunks: [SourceTranscriptChunk]
+    let annotations: [DuplicateAnnotation]?
 
     nonisolated init(
         schemaVersion: Int = 1,
         language: String?,
         mode: TranscriptionMode,
         sources: [TranscriptSource],
-        chunks: [SourceTranscriptChunk]
+        chunks: [SourceTranscriptChunk],
+        annotations: [DuplicateAnnotation]? = nil
     ) {
         self.schemaVersion = schemaVersion
         self.language = language
@@ -126,6 +128,7 @@ struct SourceSeparatedAudioTranscript: Sendable, Equatable, Codable {
             }
             return lhs.sequenceNumber < rhs.sequenceNumber
         }
+        self.annotations = annotations?.isEmpty == true ? nil : annotations
     }
 
     enum CodingKeys: String, CodingKey {
@@ -135,5 +138,6 @@ struct SourceSeparatedAudioTranscript: Sendable, Equatable, Codable {
         case timebase
         case sources
         case chunks
+        case annotations
     }
 }
