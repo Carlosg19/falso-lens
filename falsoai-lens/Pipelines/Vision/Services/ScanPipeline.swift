@@ -3,7 +3,7 @@ import CoreGraphics
 import Foundation
 import OSLog
 
-struct DemoScanResult: Identifiable, Equatable {
+struct ScanResult: Identifiable, Equatable {
     let id: UUID
     let text: String
     let analyzerResult: AnalyzerResult
@@ -11,8 +11,8 @@ struct DemoScanResult: Identifiable, Equatable {
 }
 
 @MainActor
-final class DemoScanPipeline: ObservableObject {
-    @Published private(set) var latestResult: DemoScanResult?
+final class ScanPipeline: ObservableObject {
+    @Published private(set) var latestResult: ScanResult?
     @Published private(set) var recentScans: [ScanRecord] = []
     @Published private(set) var isScanning = false
     @Published private(set) var lastOCRText = ""
@@ -27,7 +27,7 @@ final class DemoScanPipeline: ObservableObject {
     private let storage: ScanStorage?
     private let logger = Logger(
         subsystem: Bundle.main.bundleIdentifier ?? "com.falsoai.FalsoaiLens",
-        category: "DemoScanPipeline"
+        category: "ScanPipeline"
     )
 
     init(
@@ -76,7 +76,7 @@ final class DemoScanPipeline: ObservableObject {
             errorMessage = error.localizedDescription
         }
 
-        latestResult = DemoScanResult(
+        latestResult = ScanResult(
             id: UUID(),
             text: trimmedText,
             analyzerResult: result,

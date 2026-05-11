@@ -63,20 +63,4 @@ enum TranscriptSimilarityHelpers {
         guard lhsEnergy > 0, rhsEnergy > 0 else { return 0 }
         return abs(dotProduct / sqrt(lhsEnergy * rhsEnergy))
     }
-
-    nonisolated static func rmsDBFS(for samples: [Float]) -> Double {
-        guard !samples.isEmpty else { return -.infinity }
-        let squareSum = samples.reduce(Double.zero) { partialResult, sample in
-            partialResult + Double(sample * sample)
-        }
-        let rms = sqrt(squareSum / Double(samples.count))
-        guard rms > 0 else { return -.infinity }
-        return 20 * log10(rms)
-    }
-
-    nonisolated static func peakAmplitude(for samples: [Float]) -> Float {
-        samples.reduce(Float.zero) { partialResult, sample in
-            max(partialResult, abs(sample))
-        }
-    }
 }

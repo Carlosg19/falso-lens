@@ -33,13 +33,9 @@ Current implemented MVP:
 - Deterministic local manipulation-risk analysis.
 - Scan persistence using GRDB.
 - User notifications for high-risk scan results.
-
-Planned/architected next pipeline:
-
-- Live microphone transcription using AVAudioEngine.
-- Audio chunking and normalization for local Whisper inference.
-- Original-language transcription and translate-to-English modes.
-- Transcript assembly, deduplication, copy, clear, and export.
+- Live audio transcription: independent microphone and computer-audio pipelines using `AVAudioEngine` + ScreenCaptureKit, chunked and normalized for local Whisper inference.
+- Cross-source duplicate annotation across the two audio pipelines.
+- User-picked WAV file transcription via the same Whisper inference layer.
 
 Bundle ID: `com.falsoai.FalsoaiLens`.
 Deployment target: macOS 26.2.
@@ -63,11 +59,11 @@ There is no test target configured yet. `xcodebuild test` will fail until one is
 
 ## Current Architecture
 
-The implemented demo pipeline is:
+Vision pipeline (one-shot screen → OCR → analysis):
 
 ```text
 ContentView
-  -> DemoScanPipeline
+  -> ScanPipeline
   -> ScreenCaptureService
   -> OCRService
   -> LocalHeuristicAnalyzer
@@ -75,12 +71,37 @@ ContentView
   -> NotificationService
 ```
 
+Hearing pipeline (real-time; two independent instances — microphone and computer audio):
+
+```text
+ContentView
+  -> LiveAudioTranscriptionPipeline (x2)
+       -> LiveAudioCaptureProvider (MicrophoneAudioCaptureProvider | ComputerAudioCaptureService)
+       -> AudioBufferStore
+       -> AudioChunker
+       -> AudioNormalizer
+       -> RMSVoiceActivityDetector
+       -> WhisperCppEngine
+  -> TranscriptDuplicateAnalyzer (cross-pipeline)
+```
+
+File-based transcription (user-picked WAV through the same Whisper engine):
+
+```text
+ContentView -> FileTranscriptionPipeline -> WhisperCppEngine
+```
+
 Key files:
 
 - `falsoai-lens/ContentView.swift`
-- `falsoai-lens/Pipelines/Vision/Services/DemoScanPipeline.swift`
+- `falsoai-lens/Pipelines/Vision/Services/ScanPipeline.swift`
 - `falsoai-lens/Pipelines/Vision/Services/ScreenCaptureService.swift`
 - `falsoai-lens/Pipelines/Vision/Services/OCRService.swift`
+- `falsoai-lens/Pipelines/Hearing/Services/LiveAudioTranscriptionPipeline.swift`
+- `falsoai-lens/Pipelines/Hearing/Services/FileTranscriptionPipeline.swift`
+- `falsoai-lens/Pipelines/Hearing/Services/TranscriptDuplicateAnalyzer.swift`
+- `falsoai-lens/Pipelines/Hearing/Inference/WhisperCppEngine.swift`
+- `falsoai-lens/Pipelines/Hearing/Inference/RMSVoiceActivityDetector.swift`
 - `falsoai-lens/Services/LocalHeuristicAnalyzer.swift`
 - `falsoai-lens/Services/ScanStorage.swift`
 - `falsoai-lens/Services/PermissionManager.swift`
@@ -88,31 +109,23 @@ Key files:
 
 Keep capture, OCR, orchestration, analysis, storage, and notifications separated. Do not fold service logic directly into `ContentView`.
 
-## Planned Audio Pipeline
+## Audio Pipeline
 
-Use `docs/Live Audio Transcriber Architecture.md` as the source of truth for the planned audio MVP.
+Implementation notes for the live audio pipelines:
 
-MVP direction:
+- Capture: microphone via `AVAudioEngine`; computer audio via ScreenCaptureKit. Keep audio callbacks lightweight.
+- Buffering: rolling buffer in `AudioBufferStore` (actor).
+- Chunking: 5-second chunks with 1-second overlap.
+- Normalization: 16 kHz mono PCM WAV via `AudioNormalizer`.
+- VAD: `RMSVoiceActivityDetector` gates Whisper inference.
+- Inference: bundled `whisper-cli` + `ggml-small.bin` (multilingual) invoked via Swift `Process`.
+- Cleanup: temporary chunks are deleted after processing by default.
 
-- Capture microphone audio with `AVAudioEngine`.
-- Keep audio callbacks lightweight.
-- Use a rolling audio buffer actor.
-- Create 5-second chunks with 1-second overlap.
-- Normalize chunks to 16 kHz mono PCM WAV.
-- Call `whisper-cli` with Swift `Process`.
-- Use the multilingual Whisper `base` model, not `base.en`.
-- Keep audio local and delete temporary chunks by default.
-
-Do not jump directly to native C/C++ Whisper bindings until the CLI-based MVP works.
+The historical design doc `docs/Live Audio Transcriber Architecture.md` predates the current two-pipeline architecture; the code is authoritative. Do not jump directly to native C/C++ Whisper bindings — the CLI-based pipeline is the current contract.
 
 ## Persistence
 
-The app currently uses two persistence approaches:
-
-- SwiftData is configured in `falsoai_lensApp.swift`.
-- GRDB is used for scan history through `ScanStorage`.
-
-Use GRDB/`ScanStorage` for scan records unless intentionally migrating persistence. If adding new SwiftData `@Model` types, add them to the `Schema([...])` array in `falsoai_lensApp.swift`, otherwise `@Query` will not see them.
+GRDB via `ScanStorage` is the only persistence layer; it owns scan history. Live transcripts and audio are not persisted — see Privacy below.
 
 ## Concurrency
 

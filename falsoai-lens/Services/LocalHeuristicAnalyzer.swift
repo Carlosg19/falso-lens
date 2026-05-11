@@ -1,5 +1,11 @@
 import Foundation
 
+struct AnalyzerResult: Codable, Equatable {
+    let summary: String
+    let manipulationScore: Double
+    let evidence: [String]
+}
+
 struct LocalHeuristicAnalyzer {
     func analyze(text: String) -> AnalyzerResult {
         let lowered = text.lowercased()

@@ -16,21 +16,25 @@ final class LiveAudioTranscriptionPipeline: ObservableObject {
     private let chunker: AudioChunker?
     private let normalizer: AudioNormalizer?
     private let engine: TranscriptionEngine?
+    private let audioCache: AudioTranscriptCache?
     private let logger: Logger
     private var captureTask: Task<Void, Never>?
+    private var cacheSessionID = UUID()
     private var chunkHook: (@Sendable (LiveTranscriptChunkEvent) -> Void)?
 
     static func computer() -> LiveAudioTranscriptionPipeline {
         LiveAudioTranscriptionPipeline(
             source: .computer,
-            captureProvider: ComputerAudioCaptureService()
+            captureProvider: ComputerAudioCaptureService(),
+            audioCache: try? AudioTranscriptCache.makeDefault()
         )
     }
 
     static func microphone() -> LiveAudioTranscriptionPipeline {
         LiveAudioTranscriptionPipeline(
             source: .microphone,
-            captureProvider: MicrophoneAudioCaptureProvider()
+            captureProvider: MicrophoneAudioCaptureProvider(),
+            audioCache: try? AudioTranscriptCache.makeDefault()
         )
     }
 
@@ -40,10 +44,12 @@ final class LiveAudioTranscriptionPipeline: ObservableObject {
         chunker: AudioChunker? = nil,
         normalizer: AudioNormalizer? = nil,
         engine: TranscriptionEngine? = nil,
+        audioCache: AudioTranscriptCache? = nil,
         logger: Logger? = nil
     ) {
         self.source = source
         self.captureProvider = captureProvider ?? Self.makeDefaultCaptureProvider(for: source)
+        self.audioCache = audioCache
         self.logger = logger ?? Logger(
             subsystem: Bundle.main.bundleIdentifier ?? "com.falsoai.FalsoaiLens",
             category: "Live\(source.displayName)AudioTranscription"
@@ -137,6 +143,7 @@ final class LiveAudioTranscriptionPipeline: ObservableObject {
         }
 
         await chunker.clear()
+        cacheSessionID = UUID()
         transcript = SourceTranscriptState(source: source)
         errorMessage = nil
         isProcessingChunk = false
@@ -317,6 +324,11 @@ final class LiveAudioTranscriptionPipeline: ObservableObject {
             "\(self.source.rawValue, privacy: .public) transcription appended characters=\(text.count, privacy: .public), chunks=\(self.transcript.chunksTranscribed, privacy: .public), elapsedSeconds=\(elapsed, privacy: .public), language=\(result.language ?? "nil", privacy: .public)"
         )
 
+        saveTranscriptChunkToCache(
+            transcriptChunk,
+            inferenceDurationSeconds: elapsed
+        )
+
         if let chunkHook, !normalizedSamples.isEmpty, normalizedSampleRate > 0 {
             let event = LiveTranscriptChunkEvent(
                 chunk: transcriptChunk,
@@ -324,6 +336,38 @@ final class LiveAudioTranscriptionPipeline: ObservableObject {
                 normalizedSampleRate: normalizedSampleRate
             )
             chunkHook(event)
+        }
+    }
+
+    private func saveTranscriptChunkToCache(
+        _ chunk: SourceTranscriptChunk,
+        inferenceDurationSeconds: Double?
+    ) {
+        guard let audioCache else { return }
+
+        let sessionID = cacheSessionID
+        let source = self.source
+        let logger = self.logger
+
+        Task {
+            do {
+                switch source {
+                case .computer:
+                    try await audioCache.saveComputerChunk(
+                        chunk,
+                        sessionID: sessionID,
+                        inferenceDurationSeconds: inferenceDurationSeconds
+                    )
+                case .microphone:
+                    try await audioCache.saveMicrophoneChunk(
+                        chunk,
+                        sessionID: sessionID,
+                        inferenceDurationSeconds: inferenceDurationSeconds
+                    )
+                }
+            } catch {
+                logger.error("\(source.rawValue, privacy: .public) transcript cache save failed: \(String(describing: error), privacy: .public)")
+            }
         }
     }
 

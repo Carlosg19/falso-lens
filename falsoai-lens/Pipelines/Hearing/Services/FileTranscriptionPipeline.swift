@@ -4,7 +4,7 @@ import OSLog
 import SwiftUI
 
 @MainActor
-final class HearingDemoPipeline: ObservableObject {
+final class FileTranscriptionPipeline: ObservableObject {
     @Published private(set) var latestResult: TranscriptionResult?
     @Published private(set) var isTranscribing: Bool = false
     @Published private(set) var lastSelectedFileURL: URL?
@@ -14,7 +14,7 @@ final class HearingDemoPipeline: ObservableObject {
     private let engine: TranscriptionEngine?
     private let logger = Logger(
         subsystem: Bundle.main.bundleIdentifier ?? "com.falsoai.FalsoaiLens",
-        category: "HearingDemo"
+        category: "FileTranscription"
     )
 
     init(engine: TranscriptionEngine? = nil) {
@@ -28,19 +28,20 @@ final class HearingDemoPipeline: ObservableObject {
                 let message = error.errorDescription ?? "Whisper engine unavailable"
                 let suggestion = error.recoverySuggestion ?? ""
                 self.errorMessage = suggestion.isEmpty ? message : "\(message) \(suggestion)"
-                logger.error("HearingDemoPipeline could not construct engine: \(message, privacy: .public). \(suggestion, privacy: .public)")
+                logger.error("FileTranscriptionPipeline could not construct engine: \(message, privacy: .public). \(suggestion, privacy: .public)")
             } catch {
                 self.engine = nil
                 self.errorMessage = "Whisper engine unavailable: \(error.localizedDescription)"
-                logger.error("HearingDemoPipeline failed to construct engine: \(String(describing: error), privacy: .public)")
+                logger.error("FileTranscriptionPipeline failed to construct engine: \(String(describing: error), privacy: .public)")
             }
         }
 
         #if DEBUG
-        WhisperCppEngine.runParserSmokeCheck()
+        WhisperOutputParser.runParserSmokeCheck()
         RMSVoiceActivityDetector.runVADSmokeCheck()
         TranscriptDuplicateAnalyzer.runDuplicateSmokeCheck()
         LiveAudioTranscriptionPipeline.runStateSmokeCheck()
+        AudioTranscriptCache.runCacheSmokeCheck()
         #endif
     }
 
@@ -53,7 +54,7 @@ final class HearingDemoPipeline: ObservableObject {
         latestResult = nil
         lastInferenceDurationSeconds = nil
         errorMessage = nil
-        logger.info("HearingDemo file selected path=\(url.path, privacy: .private)")
+        logger.info("FileTranscription file selected path=\(url.path, privacy: .private)")
     }
 
     func transcribe(mode: TranscriptionMode) async {
@@ -82,7 +83,7 @@ final class HearingDemoPipeline: ObservableObject {
             workingURL = try Self.copyToSandboxTemporary(userURL)
         } catch {
             errorMessage = "Could not stage audio file for transcription: \(error.localizedDescription)"
-            logger.error("HearingDemo copy failed: \(String(describing: error), privacy: .public)")
+            logger.error("FileTranscription copy failed: \(String(describing: error), privacy: .public)")
             return
         }
         defer {
@@ -99,16 +100,16 @@ final class HearingDemoPipeline: ObservableObject {
                 errorMessage = "No voice detected in the selected file. The file may be silent, or its content fell below the -40 dBFS detection threshold."
             }
             logger.info(
-                "HearingDemo transcription completed mode=\(String(describing: mode), privacy: .public), elapsedSeconds=\(elapsed, privacy: .public), characters=\(result.text.count, privacy: .public), segments=\(result.segments.count, privacy: .public), language=\(result.language ?? "nil", privacy: .public)"
+                "FileTranscription transcription completed mode=\(String(describing: mode), privacy: .public), elapsedSeconds=\(elapsed, privacy: .public), characters=\(result.text.count, privacy: .public), segments=\(result.segments.count, privacy: .public), language=\(result.language ?? "nil", privacy: .public)"
             )
         } catch let error as WhisperEngineError {
             let message = error.errorDescription ?? "Transcription failed."
             let suggestion = error.recoverySuggestion ?? ""
             errorMessage = suggestion.isEmpty ? message : "\(message) \(suggestion)"
-            logger.error("HearingDemo transcription failed: \(message, privacy: .public)")
+            logger.error("FileTranscription transcription failed: \(message, privacy: .public)")
         } catch {
             errorMessage = "Transcription failed: \(error.localizedDescription)"
-            logger.error("HearingDemo transcription failed (unexpected): \(String(describing: error), privacy: .public)")
+            logger.error("FileTranscription transcription failed (unexpected): \(String(describing: error), privacy: .public)")
         }
     }
 

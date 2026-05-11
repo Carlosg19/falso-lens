@@ -7,18 +7,18 @@
 
 import AppKit
 import CoreAudio
-import SwiftData
 import SwiftUI
 import UniformTypeIdentifiers
 
 struct ContentView: View {
-    @StateObject private var pipeline = DemoScanPipeline()
-    @StateObject private var hearing = HearingDemoPipeline()
+    @StateObject private var pipeline = ScanPipeline()
+    @StateObject private var hearing = FileTranscriptionPipeline()
     @StateObject private var computerHearing = LiveAudioTranscriptionPipeline.computer()
     @StateObject private var microphoneHearing = LiveAudioTranscriptionPipeline.microphone()
     @StateObject private var duplicateAnalyzer = TranscriptDuplicateAnalyzer()
     @StateObject private var audioInputDevices = AudioInputDevicePickerViewModel()
-    @State private var hearingMode: TranscriptionMode = .transcribeOriginalLanguage
+    @StateObject private var audioTranscriptCacheBrowser = AudioTranscriptCacheBrowserViewModel()
+    @State private var hearingMode: TranscriptionMode = .translateToEnglish
     @State private var permissionSnapshot: PermissionSnapshot?
     @State private var permissionDebugSummary = "Permissions not checked yet"
     @State private var lastPermissionAction = "No permission action yet"
@@ -217,6 +217,7 @@ struct ContentView: View {
             await refreshPermissions()
             audioInputDevices.refresh()
             microphoneHearing.setInputDeviceID(audioInputDevices.selectedDeviceID)
+            await audioTranscriptCacheBrowser.refresh()
 
             let analyzer = duplicateAnalyzer
             computerHearing.setChunkHook { [weak analyzer] event in
@@ -270,7 +271,7 @@ struct ContentView: View {
         }
     }
 
-    private func resultView(_ result: DemoScanResult) -> some View {
+    private func resultView(_ result: ScanResult) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             Text(result.analyzerResult.summary)
                 .font(.headline)
@@ -330,6 +331,7 @@ struct ContentView: View {
     private func stopLiveAudioPipelines() async {
         await computerHearing.stop()
         await microphoneHearing.stop()
+        await audioTranscriptCacheBrowser.refresh()
     }
 
     private func clearLiveAudioTranscripts() {
@@ -539,6 +541,11 @@ struct ContentView: View {
                     ) {
                         copyToPasteboard(microphoneHearing.transcript.text)
                     }
+
+                    AudioTranscriptCacheBrowserView(
+                        viewModel: audioTranscriptCacheBrowser,
+                        copyAction: copyToPasteboard
+                    )
                 }
 
                 if !duplicateAnalyzer.annotations.isEmpty {
@@ -824,5 +831,4 @@ struct ContentView: View {
 
 #Preview {
     ContentView()
-        .modelContainer(for: Item.self, inMemory: true)
 }
