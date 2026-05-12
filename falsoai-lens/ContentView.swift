@@ -118,6 +118,7 @@ struct ContentView: View {
 
                     realtimeScreenTextPanel
                     realtimeEncounteredTextSection
+                    windowAnalysisSection
                     realtimeClassifierOutputSection
                     realtimeCachedTextSection
 
@@ -559,6 +560,86 @@ struct ContentView: View {
                     .padding(10)
             }
             .frame(minHeight: 220, maxHeight: 360)
+            .background(Color(nsColor: .textBackgroundColor))
+            .clipShape(RoundedRectangle(cornerRadius: 6))
+        }
+        .frame(maxWidth: .infinity, alignment: .topLeading)
+        .padding()
+        .background(.thinMaterial)
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+    }
+
+    private var windowAnalysisSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text("5-Minute Window Analyses")
+                    .font(.headline)
+                Spacer()
+                Text("\(realtimeScreenText.recentAnalyses.count) saved")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Button {
+                    realtimeScreenText.clearAnalyses()
+                } label: {
+                    Label("Clear", systemImage: "trash")
+                }
+                .disabled(realtimeScreenText.recentAnalyses.isEmpty)
+            }
+
+            if let started = realtimeScreenText.currentWindowStartedAt {
+                Text("Current window started \(started.formatted(date: .omitted, time: .standard)) — windows completed: \(realtimeScreenText.windowsCompleted)")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else if realtimeScreenText.windowsCompleted > 0 {
+                Text("Recording stopped — \(realtimeScreenText.windowsCompleted) window\(realtimeScreenText.windowsCompleted == 1 ? "" : "s") completed this session")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else {
+                Text("Start a recording session; the first analysis appears after five minutes of captured text.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            if let lastError = realtimeScreenText.lastAnalysisError {
+                Text(lastError)
+                    .font(.caption)
+                    .foregroundStyle(.red)
+            }
+
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 12) {
+                    if realtimeScreenText.recentAnalyses.isEmpty {
+                        Text("No window analyses yet.")
+                            .foregroundStyle(.secondary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    } else {
+                        ForEach(realtimeScreenText.recentAnalyses) { record in
+                            VStack(alignment: .leading, spacing: 6) {
+                                HStack {
+                                    Text("Window \(record.sequenceNumber) — \(record.analyzerID)")
+                                        .font(.subheadline.weight(.semibold))
+                                    Spacer()
+                                    Text(record.generatedAt.formatted(date: .abbreviated, time: .standard))
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                                Text("\(record.encounterCount) lines · \(String(format: "%.2f", record.latencySeconds)) s analyzer")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                Text(record.summaryMarkdown)
+                                    .font(.system(.body, design: .monospaced))
+                                    .textSelection(.enabled)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                            }
+                            .padding(10)
+                            .background(Color(nsColor: .textBackgroundColor).opacity(0.6))
+                            .clipShape(RoundedRectangle(cornerRadius: 6))
+                        }
+                    }
+                }
+                .padding(8)
+            }
+            .frame(minHeight: 220, maxHeight: 480)
             .background(Color(nsColor: .textBackgroundColor))
             .clipShape(RoundedRectangle(cornerRadius: 6))
         }
