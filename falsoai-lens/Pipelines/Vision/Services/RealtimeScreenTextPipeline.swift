@@ -44,6 +44,7 @@ final class RealtimeScreenTextPipeline: ObservableObject {
         #if DEBUG
         Task {
             await ScreenTextEncounterMemory.runSmokeChecks()
+            ScreenTextWindowTracker.runSmokeChecks()
         }
         #endif
     }
