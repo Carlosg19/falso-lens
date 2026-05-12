@@ -18,9 +18,11 @@ final class RealtimeScreenTextPipeline: ObservableObject {
     @Published private(set) var lastAnalysisError: String?
     @Published private(set) var windowsCompleted = 0
     @Published private(set) var currentWindowStartedAt: Date?
+    @Published private(set) var recentAnalyses: [ScreenTextWindowAnalysisRecord] = []
 
     private let sampler: RealtimeScreenTextSampler
     private let cache: RealtimeScreenTextCache?
+    private let analysisStorage: ScreenTextWindowAnalysisStorage?
     private let encounterMemory: ScreenTextEncounterMemory
     private let sampleIntervalSeconds: TimeInterval
     private let logger = Logger(
@@ -43,7 +45,8 @@ final class RealtimeScreenTextPipeline: ObservableObject {
         encounterMemory: ScreenTextEncounterMemory = ScreenTextEncounterMemory(),
         sampleIntervalSeconds: TimeInterval = 1,
         windowAnalyzer: any ScreenTextWindowAnalyzing = StubScreenTextWindowAnalyzer(),
-        windowSeconds: TimeInterval = 5 * 60
+        windowSeconds: TimeInterval = 5 * 60,
+        analysisStorage: ScreenTextWindowAnalysisStorage? = try? ScreenTextWindowAnalysisStorage.makeDefault()
     ) {
         self.sampler = sampler ?? RealtimeScreenTextSampler()
         self.cache = cache
@@ -51,7 +54,9 @@ final class RealtimeScreenTextPipeline: ObservableObject {
         self.sampleIntervalSeconds = max(1, sampleIntervalSeconds)
         self.windowAnalyzer = windowAnalyzer
         self.windowTracker = ScreenTextWindowTracker(windowSeconds: windowSeconds)
+        self.analysisStorage = analysisStorage
         refreshRecentSnapshots()
+        refreshRecentAnalyses()
 
         #if DEBUG
         Task {
@@ -117,6 +122,37 @@ final class RealtimeScreenTextPipeline: ObservableObject {
                 recentSnapshots = try await cache.fetchRecent(limit: 20)
             } catch {
                 logger.error("Realtime screen text cache refresh failed: \(String(describing: error), privacy: .public)")
+            }
+        }
+    }
+
+    func refreshRecentAnalyses() {
+        guard let analysisStorage else {
+            recentAnalyses = []
+            return
+        }
+
+        Task {
+            do {
+                recentAnalyses = try await analysisStorage.fetchRecent(limit: 20)
+            } catch {
+                logger.error("Refreshing recent analyses failed: \(String(describing: error), privacy: .public)")
+            }
+        }
+    }
+
+    func clearAnalyses() {
+        guard let analysisStorage else { return }
+
+        Task {
+            do {
+                try await analysisStorage.clearAll()
+                recentAnalyses = []
+                lastAnalysis = nil
+                statusText = "Window analyses cleared."
+            } catch {
+                errorMessage = Self.userFacingMessage(for: error)
+                logger.error("Clearing analyses failed: \(String(describing: error), privacy: .public)")
             }
         }
     }
@@ -260,12 +296,27 @@ final class RealtimeScreenTextPipeline: ObservableObject {
         windowsCompleted += 1
         statusText = "Window \(analysis.sequenceNumber) analyzed (\(analysis.encounterCount) lines, \(String(format: "%.2f", analysis.latencySeconds)) s)."
         logger.info("Window analysis completed sequence=\(analysis.sequenceNumber, privacy: .public), encounters=\(analysis.encounterCount, privacy: .public), latencySeconds=\(analysis.latencySeconds, privacy: .public)")
+
+        guard let storage = analysisStorage else { return }
+        Task {
+            do {
+                _ = try await storage.save(analysis)
+                self.refreshRecentAnalyses()
+            } catch {
+                self.recordAnalysisStorageError(error)
+            }
+        }
     }
 
     private func handleAnalysisFailed(error: Error, window: ScreenTextWindow) {
         lastAnalysisError = Self.userFacingMessage(for: error)
         statusText = "Window \(window.sequenceNumber) analysis failed."
         logger.error("Window analysis failed sequence=\(window.sequenceNumber, privacy: .public), error=\(String(describing: error), privacy: .public)")
+    }
+
+    private func recordAnalysisStorageError(_ error: Error) {
+        lastAnalysisError = Self.userFacingMessage(for: error)
+        logger.error("Persisting analysis failed: \(String(describing: error), privacy: .public)")
     }
 
     private func shouldCache(_ snapshot: RealtimeScreenTextSnapshot) async throws -> Bool {
