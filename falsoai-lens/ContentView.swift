@@ -11,7 +11,8 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 struct ContentView: View {
-    @StateObject private var pipeline = ScanPipeline()
+    @StateObject private var screenText = ScreenTextPipeline()
+    @StateObject private var realtimeScreenText = RealtimeScreenTextPipeline()
     @StateObject private var hearing = FileTranscriptionPipeline()
     @StateObject private var computerHearing = LiveAudioTranscriptionPipeline.computer()
     @StateObject private var microphoneHearing = LiveAudioTranscriptionPipeline.microphone()
@@ -19,13 +20,30 @@ struct ContentView: View {
     @StateObject private var audioInputDevices = AudioInputDevicePickerViewModel()
     @StateObject private var audioTranscriptCacheBrowser = AudioTranscriptCacheBrowserViewModel()
     @State private var hearingMode: TranscriptionMode = .translateToEnglish
+    @State private var screenTextExportMode: ScreenTextExportMode = .markdown
     @State private var permissionSnapshot: PermissionSnapshot?
     @State private var permissionDebugSummary = "Permissions not checked yet"
     @State private var lastPermissionAction = "No permission action yet"
     @State private var runtimePermissionIdentity: RuntimePermissionIdentity?
-    @State private var demoText = "Limited time offer: act now before they hide the truth from you."
     private let permissionManager = PermissionManager()
     private let notificationService = NotificationService()
+    private let screenTextLLMExporter = ScreenTextLLMExporter()
+
+    private enum ScreenTextExportMode: String, CaseIterable, Identifiable {
+        case markdown
+        case chunks
+
+        var id: Self { self }
+
+        var title: String {
+            switch self {
+            case .markdown:
+                return "Markdown"
+            case .chunks:
+                return "Chunks"
+            }
+        }
+    }
 
     var body: some View {
         NavigationSplitView {
@@ -37,17 +55,20 @@ struct ContentView: View {
                     permissionRow("Microphone", permissionSnapshot?.microphone)
                 }
 
-                Section("Recent Scans") {
-                    if pipeline.recentScans.isEmpty {
-                        Text("No scans yet")
+                Section("Realtime Screen Text Cache") {
+                    if realtimeScreenText.recentSnapshots.isEmpty {
+                        Text("No realtime snapshots yet")
                             .foregroundStyle(.secondary)
                     } else {
-                        ForEach(pipeline.recentScans) { scan in
+                        ForEach(realtimeScreenText.recentSnapshots) { snapshot in
                             VStack(alignment: .leading, spacing: 4) {
-                                Text(scan.analyzerSummary ?? "Scan")
+                                Text("Sample \(snapshot.sequenceNumber)")
                                     .font(.headline)
-                                Text(scan.recognizedText)
+                                Text(snapshot.recognizedText)
                                     .lineLimit(2)
+                                    .foregroundStyle(.secondary)
+                                Text("\(snapshot.displayCount) displays | \(snapshot.recognizedText.count) chars | \(snapshot.capturedAt.formatted(date: .omitted, time: .standard))")
+                                    .font(.caption)
                                     .foregroundStyle(.secondary)
                             }
                             .padding(.vertical, 4)
@@ -59,45 +80,29 @@ struct ContentView: View {
             .toolbar {
                 Button("Refresh") {
                     Task { await refreshPermissions() }
-                    pipeline.refreshRecentScans()
+                    realtimeScreenText.refreshRecentSnapshots()
                 }
             }
         } detail: {
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
                     VStack(alignment: .leading, spacing: 4) {
-                        Text("Realtime Manipulation Demo")
+                        Text("Screen Text Capture")
                             .font(.title)
-                        Text("Paste text or capture the main display to exercise screen recording, OCR, analysis, storage, and notifications.")
+                        Text("Capture the main display and save recognized text locally.")
                             .foregroundStyle(.secondary)
                     }
 
-                    TextEditor(text: $demoText)
-                        .font(.body)
-                        .frame(minHeight: 140)
-                        .padding(6)
-                        .overlay {
-                            RoundedRectangle(cornerRadius: 6)
-                                .stroke(Color.secondary.opacity(0.25), lineWidth: 1)
-                        }
-
                     HStack {
                         Button {
-                            Task { await pipeline.scan(text: demoText) }
-                        } label: {
-                            Label(pipeline.isScanning ? "Scanning" : "Run Demo Scan", systemImage: "viewfinder")
-                        }
-                        .disabled(pipeline.isScanning)
-
-                        Button {
-                            Task { await pipeline.captureScreenOCRAndScan() }
+                            Task { await screenText.captureScreenText() }
                         } label: {
                             Label(
-                                pipeline.isCapturingScreen ? "Capturing" : "Capture Screen + OCR",
+                                screenText.isCapturingScreen ? "Capturing" : "Capture Screen Text",
                                 systemImage: "text.viewfinder"
                             )
                         }
-                        .disabled(pipeline.isCapturingScreen || pipeline.isScanning)
+                        .disabled(screenText.isCapturingScreen)
 
                         Button("Request Screen Recording") {
                             let granted = permissionManager.requestScreenRecordingPermission()
@@ -106,9 +111,13 @@ struct ContentView: View {
                         }
                     }
 
-                    Text(pipeline.captureStatus)
+                    Text(screenText.captureStatus)
                         .font(.callout)
                         .foregroundStyle(.secondary)
+
+                    realtimeScreenTextPanel
+                    realtimeEncounteredTextSection
+                    realtimeCachedTextSection
 
                     Text(permissionDebugSummary)
                         .font(.caption)
@@ -170,41 +179,13 @@ struct ContentView: View {
                         }
                     }
 
-                    if !pipeline.lastOCRText.isEmpty {
-                        VStack(alignment: .leading, spacing: 8) {
-                            HStack {
-                                Text("Last OCR Capture")
-                                    .font(.headline)
-                                Spacer()
-                                Text("\(pipeline.lastOCRText.count) chars")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                            }
-                            ScrollView {
-                                Text(pipeline.lastOCRText)
-                                    .font(.system(.body, design: .monospaced))
-                                    .textSelection(.enabled)
-                                    .foregroundStyle(.primary)
-                                    .frame(maxWidth: .infinity, alignment: .leading)
-                                    .padding(8)
-                            }
-                            .frame(minHeight: 240, maxHeight: 420)
-                            .background(Color(nsColor: .textBackgroundColor))
-                            .clipShape(RoundedRectangle(cornerRadius: 6))
-                        }
-                        .frame(maxWidth: .infinity, alignment: .topLeading)
-                        .padding()
-                        .background(.thinMaterial)
-                        .clipShape(RoundedRectangle(cornerRadius: 8))
+                    if let document = screenText.latestDocument, !screenText.lastOCRText.isEmpty {
+                        screenTextExportPanel(for: document)
                     }
 
-                    if let errorMessage = pipeline.errorMessage {
+                    if let errorMessage = screenText.errorMessage {
                         Text(errorMessage)
                             .foregroundStyle(.red)
-                    }
-
-                    if let result = pipeline.latestResult {
-                        resultView(result)
                     }
 
                     hearingDemoSection
@@ -231,6 +212,345 @@ struct ContentView: View {
                 }
             }
         }
+        .onDisappear {
+            realtimeScreenText.stop()
+        }
+    }
+
+    private func screenTextExportPanel(for document: MultiDisplayScreenTextDocument) -> some View {
+        let exportedDocument = screenTextLLMExporter.export(document)
+        let markdown = screenTextLLMExporter.anchoredMarkdown(from: exportedDocument)
+        let chunks = screenTextLLMExporter.chunks(from: exportedDocument)
+
+        return VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text("LLM Screen Text Export")
+                    .font(.headline)
+                Spacer()
+                Text(screenTextExportMode == .markdown ? "\(markdown.count) chars" : "\(chunks.count) chunks")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            HStack(spacing: 12) {
+                Label("\(document.displays.count) displays", systemImage: "display.2")
+                Label("\(document.observationCount) observations", systemImage: "text.magnifyingglass")
+                Label("\(document.lineCount) lines", systemImage: "text.line.first.and.arrowtriangle.forward")
+                Label("\(document.blockCount) blocks", systemImage: "text.alignleft")
+                Label("\(document.regionCount) regions", systemImage: "rectangle.3.group")
+                Label(
+                    screenText.lastCaptureUsedCache ? "Memory cache" : "Fresh OCR",
+                    systemImage: screenText.lastCaptureUsedCache ? "memorychip" : "camera.viewfinder"
+                )
+            }
+            .font(.caption)
+            .foregroundStyle(.secondary)
+
+            Text(
+                document.displays
+                    .map { display in
+                        "Display \(display.index + 1): \(Int(display.document.frameSize.width)) x \(Int(display.document.frameSize.height))"
+                    }
+                    .joined(separator: " | ")
+                + " | captured \(document.capturedAt.formatted(date: .omitted, time: .standard))"
+            )
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .textSelection(.enabled)
+
+            HStack {
+                Picker("Export View", selection: $screenTextExportMode) {
+                    ForEach(ScreenTextExportMode.allCases) { mode in
+                        Text(mode.title).tag(mode)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .frame(maxWidth: 260)
+
+                Spacer()
+
+                Button {
+                    copyToPasteboard(screenTextExportText(markdown: markdown, chunks: chunks))
+                } label: {
+                    Label("Copy", systemImage: "doc.on.doc")
+                }
+            }
+
+            screenTextExportContent(markdown: markdown, chunks: chunks)
+        }
+        .frame(maxWidth: .infinity, alignment: .topLeading)
+        .padding()
+        .background(.thinMaterial)
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+    }
+
+    @ViewBuilder
+    private func screenTextExportContent(markdown: String, chunks: [ScreenTextLLMChunk]) -> some View {
+        switch screenTextExportMode {
+        case .markdown:
+            ScrollView {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Anchored Markdown")
+                        .font(.subheadline.weight(.semibold))
+                    Text(markdown)
+                        .font(.system(.body, design: .monospaced))
+                        .textSelection(.enabled)
+                        .foregroundStyle(.primary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .padding(8)
+            }
+            .frame(minHeight: 240, maxHeight: 420)
+            .background(Color(nsColor: .textBackgroundColor))
+            .clipShape(RoundedRectangle(cornerRadius: 6))
+        case .chunks:
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 10) {
+                    if chunks.isEmpty {
+                        Text("No export chunks available.")
+                            .foregroundStyle(.secondary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    } else {
+                        ForEach(chunks, id: \.alias) { chunk in
+                            VStack(alignment: .leading, spacing: 6) {
+                                HStack {
+                                    Text(chunk.alias)
+                                        .font(.system(.caption, design: .monospaced).weight(.semibold))
+                                    Spacer()
+                                    Text("\(chunk.characterCount) chars")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+
+                                Text("displayAlias: \(chunk.displayAlias) | regionAliases: \(chunk.regionAliases.joined(separator: ", "))")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                    .textSelection(.enabled)
+
+                                Text(chunk.text)
+                                    .font(.system(.body, design: .monospaced))
+                                    .textSelection(.enabled)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                            }
+                            .padding(8)
+                            .background(Color(nsColor: .controlBackgroundColor))
+                            .clipShape(RoundedRectangle(cornerRadius: 6))
+                        }
+                    }
+                }
+                .padding(8)
+            }
+            .frame(minHeight: 240, maxHeight: 420)
+            .background(Color(nsColor: .textBackgroundColor))
+            .clipShape(RoundedRectangle(cornerRadius: 6))
+        }
+    }
+
+    private func screenTextExportText(markdown: String, chunks: [ScreenTextLLMChunk]) -> String {
+        switch screenTextExportMode {
+        case .markdown:
+            return markdown
+        case .chunks:
+            return chunks
+                .map { chunk in
+                    [
+                        "[\(chunk.alias)]",
+                        "displayAlias: \(chunk.displayAlias)",
+                        "regionAliases: \(chunk.regionAliases.joined(separator: ", "))",
+                        chunk.text
+                    ].joined(separator: "\n")
+                }
+                .joined(separator: "\n\n")
+        }
+    }
+
+    private func encounteredTextExport(_ encounters: [ScreenTextEncounter]) -> String {
+        encounters
+            .map { encounter in
+                let firstSeen = encounter.firstSeenAt.formatted(date: .omitted, time: .standard)
+                let lastSeen = encounter.lastSeenAt.formatted(date: .omitted, time: .standard)
+                let displayLabel = "Display \(encounter.latestSource.displayIndex + 1)"
+
+                return [
+                    "[\(firstSeen)-\(lastSeen)] \(displayLabel) seen \(encounter.seenCount)x",
+                    encounter.text
+                ].joined(separator: "\n")
+            }
+            .joined(separator: "\n\n")
+    }
+
+    private func encounteredTextOnlyExport(_ encounters: [ScreenTextEncounter]) -> String {
+        encounters
+            .map(\.text)
+            .joined(separator: "\n\n")
+    }
+
+    private var realtimeScreenTextPanel: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text("Realtime Screen Text")
+                    .font(.headline)
+                Spacer()
+                Text(realtimeScreenText.isRunning ? "Recording" : "Stopped")
+                    .font(.caption)
+                    .foregroundStyle(realtimeScreenText.isRunning ? .green : .secondary)
+            }
+
+            HStack {
+                Button {
+                    if realtimeScreenText.isRunning {
+                        realtimeScreenText.stop()
+                    } else {
+                        realtimeScreenText.start()
+                    }
+                } label: {
+                    Label(
+                        realtimeScreenText.isRunning ? "Stop" : "Start",
+                        systemImage: realtimeScreenText.isRunning ? "stop.circle" : "record.circle"
+                    )
+                }
+
+                Button {
+                    realtimeScreenText.clearCache()
+                } label: {
+                    Label("Clear Cache", systemImage: "trash")
+                }
+                .disabled(realtimeScreenText.isRunning || realtimeScreenText.recentSnapshots.isEmpty)
+
+                Spacer()
+
+                if realtimeScreenText.isSampling {
+                    ProgressView()
+                        .controlSize(.small)
+                }
+            }
+
+            HStack(spacing: 12) {
+                Label("\(realtimeScreenText.samplesCaptured) samples", systemImage: "camera.metering.center.weighted")
+                Label("\(realtimeScreenText.snapshotsCached) cached", systemImage: "externaldrive")
+                Label("\(realtimeScreenText.duplicateSamplesSkipped) duplicates skipped", systemImage: "equal.circle")
+            }
+            .font(.caption)
+            .foregroundStyle(.secondary)
+
+            Text(realtimeScreenText.statusText)
+                .font(.callout)
+                .foregroundStyle(.secondary)
+
+            if let latestSnapshot = realtimeScreenText.latestSnapshot {
+                Text("\(latestSnapshot.displayCount) displays | \(latestSnapshot.observationCount) observations | \(latestSnapshot.ocrDisplayCount) OCR displays | \(latestSnapshot.reusedDisplayCount) cached displays | \(latestSnapshot.elapsedSeconds.formatted(.number.precision(.fractionLength(2))))s")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+            }
+
+            if let errorMessage = realtimeScreenText.errorMessage {
+                Text(errorMessage)
+                    .font(.callout)
+                    .foregroundStyle(.red)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .topLeading)
+        .padding()
+        .background(.thinMaterial)
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+    }
+
+    private var realtimeEncounteredTextSection: some View {
+        let encounters = realtimeScreenText.recentEncounters
+        let retainedText = encounteredTextOnlyExport(encounters)
+        let detailText = encounteredTextExport(encounters)
+        let totalSightings = encounters.reduce(0) { $0 + $1.seenCount }
+
+        return VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text("Last 5 Minutes Screen Text")
+                    .font(.headline)
+                Spacer()
+                Text("\(encounters.count) unique lines | \(totalSightings) sightings")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Button {
+                    copyToPasteboard(retainedText)
+                } label: {
+                    Label("Copy Text", systemImage: "doc.on.doc")
+                }
+                .disabled(retainedText.isEmpty)
+
+                Button {
+                    copyToPasteboard(detailText)
+                } label: {
+                    Label("Copy Details", systemImage: "list.bullet.clipboard")
+                }
+                .disabled(detailText.isEmpty)
+            }
+
+            ScrollView {
+                Text(retainedText.isEmpty ? "No screen text encountered yet." : retainedText)
+                    .font(.system(.body, design: .monospaced))
+                    .foregroundStyle(retainedText.isEmpty ? .secondary : .primary)
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(10)
+            }
+            .frame(minHeight: 220, maxHeight: 360)
+            .background(Color(nsColor: .textBackgroundColor))
+            .clipShape(RoundedRectangle(cornerRadius: 6))
+        }
+        .frame(maxWidth: .infinity, alignment: .topLeading)
+        .padding()
+        .background(.thinMaterial)
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+    }
+
+    private var realtimeCachedTextSection: some View {
+        let cachedSnapshot = realtimeScreenText.recentSnapshots.first
+        let cachedText = cachedSnapshot?.recognizedText.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+
+        return VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text("Realtime Cached Text")
+                    .font(.headline)
+                Spacer()
+                if let cachedSnapshot {
+                    Text("Sample \(cachedSnapshot.sequenceNumber)")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Button {
+                    copyToPasteboard(cachedText)
+                } label: {
+                    Label("Copy", systemImage: "doc.on.doc")
+                }
+                .disabled(cachedText.isEmpty)
+            }
+
+            if let cachedSnapshot {
+                HStack(spacing: 12) {
+                    Label("\(cachedSnapshot.displayCount) displays", systemImage: "display.2")
+                    Label("\(cachedText.count) chars", systemImage: "textformat.size")
+                    Label(cachedSnapshot.capturedAt.formatted(date: .omitted, time: .standard), systemImage: "clock")
+                }
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            }
+
+            ScrollView {
+                Text(cachedText.isEmpty ? "No cached text yet." : cachedText)
+                    .font(.system(.body, design: .monospaced))
+                    .foregroundStyle(cachedText.isEmpty ? .secondary : .primary)
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(10)
+            }
+            .frame(minHeight: 180, maxHeight: 320)
+            .background(Color(nsColor: .textBackgroundColor))
+            .clipShape(RoundedRectangle(cornerRadius: 6))
+        }
+        .frame(maxWidth: .infinity, alignment: .topLeading)
+        .padding()
+        .background(.thinMaterial)
+        .clipShape(RoundedRectangle(cornerRadius: 8))
     }
 
     private func refreshPermissions() async {
@@ -269,19 +589,6 @@ struct ContentView: View {
         case .unknown, nil:
             return "Unknown"
         }
-    }
-
-    private func resultView(_ result: ScanResult) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text(result.analyzerResult.summary)
-                .font(.headline)
-            ProgressView(value: result.analyzerResult.manipulationScore)
-            Text("Evidence: \(result.analyzerResult.evidence.joined(separator: ", "))")
-                .foregroundStyle(.secondary)
-        }
-        .padding()
-        .background(.thinMaterial)
-        .clipShape(RoundedRectangle(cornerRadius: 8))
     }
 
     private var isLiveAudioRunning: Bool {

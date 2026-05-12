@@ -32,6 +32,14 @@ enum ScreenCaptureError: LocalizedError {
     }
 }
 
+struct CapturedDisplayFrame: Identifiable {
+    var id: UInt32 { displayID }
+
+    let displayID: UInt32
+    let index: Int
+    let image: CGImage
+}
+
 @MainActor
 final class ScreenCaptureService {
     private(set) var stream: SCStream?
@@ -62,8 +70,8 @@ final class ScreenCaptureService {
         }
     }
 
-    func captureMainDisplayImage() async throws -> CGImage {
-        logger.info("Starting one-shot screen capture")
+    func captureAllDisplayImages() async throws -> [CapturedDisplayFrame] {
+        logger.info("Starting all-display screen capture")
         logger.info("Capture runtime bundle=\(Bundle.main.bundleIdentifier ?? "unknown", privacy: .public), app=\(Bundle.main.bundlePath, privacy: .public), executable=\(Bundle.main.executablePath ?? "unknown", privacy: .public)")
         try prepareForCapture()
         logger.info("Screen recording preflight permission passed")
@@ -81,11 +89,28 @@ final class ScreenCaptureService {
         logger.info("Shareable display IDs: \(content.displays.map { String($0.displayID) }.joined(separator: ","), privacy: .public)")
         logger.info("Shareable applications sample: \(content.applications.prefix(8).map { "\($0.applicationName)(pid:\($0.processID))" }.joined(separator: ", "), privacy: .public)")
 
-        guard let display = content.displays.first else {
+        guard !content.displays.isEmpty else {
             logger.error("No display available in shareable content")
             throw ScreenCaptureError.noDisplayAvailable
         }
 
+        var frames: [CapturedDisplayFrame] = []
+        for (index, display) in content.displays.enumerated() {
+            frames.append(try await captureImage(for: display, index: index))
+        }
+
+        return frames
+    }
+
+    func captureMainDisplayImage() async throws -> CGImage {
+        guard let firstFrame = try await captureAllDisplayImages().first else {
+            throw ScreenCaptureError.noDisplayAvailable
+        }
+
+        return firstFrame.image
+    }
+
+    private func captureImage(for display: SCDisplay, index: Int) async throws -> CapturedDisplayFrame {
         logger.info("Using display id=\(display.displayID, privacy: .public), width=\(display.width, privacy: .public), height=\(display.height, privacy: .public)")
         let filter = SCContentFilter(display: display, excludingWindows: [])
         let configuration = SCStreamConfiguration()
@@ -97,8 +122,8 @@ final class ScreenCaptureService {
         logger.info("Configured screenshot width=\(configuration.width, privacy: .public), height=\(configuration.height, privacy: .public), showsCursor=\(configuration.showsCursor, privacy: .public), queueDepth=\(configuration.queueDepth, privacy: .public), pixelFormat=\(configuration.pixelFormat, privacy: .public)")
 
         let captureLogger = logger
-        return try await withCheckedThrowingContinuation { continuation in
-            captureLogger.info("Calling SCScreenshotManager.captureImage")
+        let image: CGImage = try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<CGImage, Error>) in
+            captureLogger.info("Calling SCScreenshotManager.captureImage for display id=\(display.displayID, privacy: .public)")
             SCScreenshotManager.captureImage(
                 contentFilter: filter,
                 configuration: configuration
@@ -119,6 +144,12 @@ final class ScreenCaptureService {
                 continuation.resume(returning: image)
             }
         }
+
+        return CapturedDisplayFrame(
+            displayID: display.displayID,
+            index: index,
+            image: image
+        )
     }
 
     func stop() async {

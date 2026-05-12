@@ -5,6 +5,10 @@ import OSLog
 
 final class OCRService {
     nonisolated func recognizeText(in image: CGImage) throws -> [String] {
+        try recognizeTextObservations(in: image).map(\.text)
+    }
+
+    nonisolated func recognizeTextObservations(in image: CGImage) throws -> [ScreenTextObservation] {
         let logger = Logger(
             subsystem: Bundle.main.bundleIdentifier ?? "com.falsoai.FalsoaiLens",
             category: "OCR"
@@ -28,9 +32,31 @@ final class OCRService {
         logger.info("Vision OCR completed observations=\(observations.count, privacy: .public)")
 
         let recognizedText = observations
-            .compactMap { $0.topCandidates(1).first?.string }
-            .filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
-        logger.info("Vision OCR recognized non-empty lines=\(recognizedText.count, privacy: .public), totalCharacters=\(recognizedText.joined(separator: "\n").count, privacy: .public)")
+            .compactMap { observation -> ScreenTextObservation? in
+                guard let candidate = observation.topCandidates(1).first else {
+                    return nil
+                }
+
+                let text = candidate.string.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !text.isEmpty else {
+                    return nil
+                }
+
+                return ScreenTextObservation(
+                    text: text,
+                    boundingBox: Self.frameBoundingBox(
+                        fromVisionBoundingBox: observation.boundingBox,
+                        imageWidth: image.width,
+                        imageHeight: image.height
+                    ),
+                    confidence: candidate.confidence
+                )
+            }
+        let recognizedCharacters = recognizedText
+            .map(\.text)
+            .joined(separator: "\n")
+            .count
+        logger.info("Vision OCR recognized non-empty lines=\(recognizedText.count, privacy: .public), totalCharacters=\(recognizedCharacters, privacy: .public)")
         return recognizedText
     }
 
@@ -43,6 +69,22 @@ final class OCRService {
             category: "OCR"
         ).info("Vision OCR joined text characters=\(joinedText.count, privacy: .public)")
         return joinedText
+    }
+
+    private nonisolated static func frameBoundingBox(
+        fromVisionBoundingBox boundingBox: CGRect,
+        imageWidth: Int,
+        imageHeight: Int
+    ) -> CGRect {
+        let width = CGFloat(imageWidth)
+        let height = CGFloat(imageHeight)
+
+        return CGRect(
+            x: boundingBox.minX * width,
+            y: (1 - boundingBox.maxY) * height,
+            width: boundingBox.width * width,
+            height: boundingBox.height * height
+        )
     }
 
     private nonisolated static func errorLogDescription(for error: Error) -> String {
