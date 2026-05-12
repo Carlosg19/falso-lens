@@ -28,6 +28,7 @@ struct ContentView: View {
     private let permissionManager = PermissionManager()
     private let notificationService = NotificationService()
     private let screenTextLLMExporter = ScreenTextLLMExporter()
+    private let screenTextLLMPreparationService = ScreenTextLLMPreparationService()
 
     private enum ScreenTextExportMode: String, CaseIterable, Identifiable {
         case markdown
@@ -117,6 +118,7 @@ struct ContentView: View {
 
                     realtimeScreenTextPanel
                     realtimeEncounteredTextSection
+                    realtimeClassifierOutputSection
                     realtimeCachedTextSection
 
                     Text(permissionDebugSummary)
@@ -385,6 +387,19 @@ struct ContentView: View {
             .joined(separator: "\n\n")
     }
 
+    private func classifierOutputText(for snapshot: RealtimeScreenTextSnapshot?) -> String {
+        guard let snapshot else { return "" }
+
+        do {
+            return try screenTextLLMPreparationService
+                .prepare(snapshot)
+                .structuredMarkdown
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+        } catch {
+            return "Classifier output failed: \(error.localizedDescription)"
+        }
+    }
+
     private var realtimeScreenTextPanel: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
@@ -489,6 +504,56 @@ struct ContentView: View {
                 Text(retainedText.isEmpty ? "No screen text encountered yet." : retainedText)
                     .font(.system(.body, design: .monospaced))
                     .foregroundStyle(retainedText.isEmpty ? .secondary : .primary)
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(10)
+            }
+            .frame(minHeight: 220, maxHeight: 360)
+            .background(Color(nsColor: .textBackgroundColor))
+            .clipShape(RoundedRectangle(cornerRadius: 6))
+        }
+        .frame(maxWidth: .infinity, alignment: .topLeading)
+        .padding()
+        .background(.thinMaterial)
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+    }
+
+    private var realtimeClassifierOutputSection: some View {
+        let latestSnapshot = realtimeScreenText.latestSnapshot
+        let classifierText = classifierOutputText(for: latestSnapshot)
+
+        return VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text("Classifier Layer Output")
+                    .font(.headline)
+                Spacer()
+                if let latestSnapshot {
+                    Text("Sample \(latestSnapshot.sequenceNumber)")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Button {
+                    copyToPasteboard(classifierText)
+                } label: {
+                    Label("Copy", systemImage: "doc.on.doc")
+                }
+                .disabled(classifierText.isEmpty)
+            }
+
+            if let latestSnapshot {
+                HStack(spacing: 12) {
+                    Label("\(latestSnapshot.displayCount) displays", systemImage: "display.2")
+                    Label("\(latestSnapshot.blockCount) blocks", systemImage: "text.alignleft")
+                    Label("\(classifierText.count) chars", systemImage: "textformat.size")
+                }
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            }
+
+            ScrollView {
+                Text(classifierText.isEmpty ? "No classifier output yet." : classifierText)
+                    .font(.system(.body, design: .monospaced))
+                    .foregroundStyle(classifierText.isEmpty ? .secondary : .primary)
                     .textSelection(.enabled)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(10)
