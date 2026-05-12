@@ -59,6 +59,7 @@ final class RealtimeScreenTextPipeline: ObservableObject {
             ScreenTextWindowTracker.runSmokeChecks()
             ScreenTextLLMPreparationService.runSmokeChecks()
             await StubScreenTextWindowAnalyzer.runSmokeChecks()
+            await ScreenTextWindowAnalysisStorage.runSmokeChecks()
         }
         #endif
     }
