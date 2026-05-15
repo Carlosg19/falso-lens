@@ -14,15 +14,27 @@ struct ScreenTextLLMPreparationService {
     private let exporter: ScreenTextLLMExporter
     private let classifier: any ScreenTextStructureClassifying
     private let promptExporter: ScreenTextStructuredPromptExporter
+    private let segmentDocumentExporter: ScreenTextWindowSegmentDocumentExporter
 
     init(
         exporter: ScreenTextLLMExporter = ScreenTextLLMExporter(),
         classifier: any ScreenTextStructureClassifying = HeuristicScreenTextStructureClassifier(),
-        promptExporter: ScreenTextStructuredPromptExporter = ScreenTextStructuredPromptExporter()
+        promptExporter: ScreenTextStructuredPromptExporter = ScreenTextStructuredPromptExporter(),
+        segmentDocumentExporter: ScreenTextWindowSegmentDocumentExporter = ScreenTextWindowSegmentDocumentExporter()
     ) {
         self.exporter = exporter
         self.classifier = classifier
         self.promptExporter = promptExporter
+        self.segmentDocumentExporter = segmentDocumentExporter
+    }
+
+    func prepareSegmentDocument(_ window: ScreenTextWindow) -> ScreenTextWindowSegmentDocument {
+        segmentDocumentExporter.export(window)
+    }
+
+    func prepareSegmentDocumentJSON(_ window: ScreenTextWindow) throws -> String {
+        let document = segmentDocumentExporter.export(window)
+        return try segmentDocumentExporter.compactJSON(document)
     }
 
     func prepare(
@@ -78,7 +90,7 @@ struct ScreenTextLLMPreparationService {
         for encounter in sortedEncounters {
             let firstSeen = encounter.firstSeenAt.formatted(date: .omitted, time: .standard)
             let lastSeen = encounter.lastSeenAt.formatted(date: .omitted, time: .standard)
-            let line = "- [\(firstSeen) → \(lastSeen) ×\(encounter.seenCount), display \(encounter.latestSource.displayIndex)] \(encounter.text)"
+            let line = "- [\(firstSeen) → \(lastSeen) ×\(encounter.seenCount), display \(encounter.displayIndex)] \(encounter.text)"
             output.append(line)
         }
 
@@ -124,18 +136,24 @@ extension ScreenTextLLMPreparationService {
                 ScreenTextEncounter(
                     text: "later line",
                     normalizedTextHash: "h-later",
+                    displayID: 1,
+                    displayIndex: 0,
                     firstSeenAt: later,
                     lastSeenAt: later,
                     seenCount: 1,
-                    latestSource: ScreenTextEncounterSource(displayID: 1, displayIndex: 0, bounds: .zero)
+                    sightings: [ScreenTextEncounterSighting(bounds: .zero, sightedAt: later, role: .unknown, blockAlias: nil)],
+                    roleCounts: [.unknown: 1]
                 ),
                 ScreenTextEncounter(
                     text: "earlier line",
                     normalizedTextHash: "h-earlier",
+                    displayID: 1,
+                    displayIndex: 0,
                     firstSeenAt: earlier,
                     lastSeenAt: earlier,
                     seenCount: 1,
-                    latestSource: ScreenTextEncounterSource(displayID: 1, displayIndex: 0, bounds: .zero)
+                    sightings: [ScreenTextEncounterSighting(bounds: .zero, sightedAt: earlier, role: .unknown, blockAlias: nil)],
+                    roleCounts: [.unknown: 1]
                 )
             ]
         )

@@ -4,7 +4,7 @@ struct ScreenTextWindowTracker: Sendable {
     let windowSeconds: TimeInterval
     private(set) var currentWindowStartedAt: Date?
 
-    init(windowSeconds: TimeInterval = 5 * 60) {
+    init(windowSeconds: TimeInterval = 60) {
         self.windowSeconds = max(1, windowSeconds)
     }
 

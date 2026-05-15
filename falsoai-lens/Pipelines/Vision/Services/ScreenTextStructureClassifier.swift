@@ -60,6 +60,15 @@ struct HeuristicScreenTextStructureClassifier: ScreenTextStructureClassifying {
             )
         }
 
+        if isAdLike(lowercaseText) {
+            return annotation(
+                block,
+                role: .ad,
+                confidence: 0.7,
+                reasons: ["contains advertising disclosure markers"]
+            )
+        }
+
         if isButtonLike(lowercaseText, wordCount: wordCount, bounds: bounds) {
             return annotation(
                 block,
@@ -398,4 +407,98 @@ struct HeuristicScreenTextStructureClassifier: ScreenTextStructureClassifying {
         let codeTokens = ["{", "}", "();", "=>", "==", "!=", "let ", "var ", "func ", "import "]
         return codeTokens.contains { text.contains($0) }
     }
+
+    private func isAdLike(_ lowercaseText: String) -> Bool {
+        let exactDisclosures: Set<String> = [
+            "sponsored",
+            "promoted",
+            "advertisement",
+            "ad",
+            "promoted post",
+            "sponsored content"
+        ]
+
+        if exactDisclosures.contains(lowercaseText) {
+            return true
+        }
+
+        return lowercaseText.hasPrefix("sponsored by ")
+            || lowercaseText.hasPrefix("promoted by ")
+            || lowercaseText.contains(" sponsored content")
+            || lowercaseText.contains(" advertisement")
+    }
 }
+
+#if DEBUG
+extension HeuristicScreenTextStructureClassifier {
+    static func runSmokeChecks() {
+        verifySponsoredLabelClassifiesAsAd()
+    }
+
+    private static func sampleBlock(
+        alias: String,
+        text: String,
+        bounds: ScreenTextLLMBounds
+    ) -> ScreenTextLLMBlock {
+        let wordCount = text.split(whereSeparator: \.isWhitespace).count
+        return ScreenTextLLMBlock(
+            alias: alias,
+            sourceID: UUID(),
+            readingOrder: 1,
+            text: text,
+            bounds: bounds,
+            normalizedBounds: bounds,
+            lineAliases: [],
+            metrics: ScreenTextLLMMetrics(
+                characterCount: text.count,
+                wordCount: wordCount,
+                areaRatio: Double(bounds.width * bounds.height)
+            )
+        )
+    }
+
+    private static func sampleDisplay(blocks: [ScreenTextLLMBlock]) -> ScreenTextLLMDisplay {
+        ScreenTextLLMDisplay(
+            alias: "d1",
+            displayID: 1,
+            index: 0,
+            capturedAt: Date(),
+            frameSize: ScreenTextLLMSize(width: 1.0, height: 1.0),
+            frameHash: "frame",
+            normalizedTextHash: "text",
+            layoutHash: "layout",
+            text: blocks.map(\.text).joined(separator: "\n"),
+            regions: [],
+            blocks: blocks,
+            lines: [],
+            observations: []
+        )
+    }
+
+    private static func classify(block: ScreenTextLLMBlock) -> ScreenTextStructureAnnotation? {
+        let classifier = HeuristicScreenTextStructureClassifier()
+        let display = sampleDisplay(blocks: [block])
+        let document = ScreenTextLLMDocument(
+            sourceDocumentID: UUID(),
+            capturedAt: Date(),
+            displayCount: 1,
+            observationCount: 0,
+            lineCount: 0,
+            blockCount: 1,
+            regionCount: 0,
+            displays: [display]
+        )
+        return classifier.classify(document).annotation(for: block.alias)
+    }
+
+    private static func verifySponsoredLabelClassifiesAsAd() {
+        let block = sampleBlock(
+            alias: "d1.b1",
+            text: "Sponsored",
+            bounds: ScreenTextLLMBounds(x: 0.4, y: 0.4, width: 0.2, height: 0.05)
+        )
+        let annotation = classify(block: block)
+        assert(annotation?.role == .ad, "Expected 'Sponsored' label to classify as ad")
+    }
+}
+#endif

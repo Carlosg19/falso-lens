@@ -18,12 +18,16 @@ final class RealtimeScreenTextPipeline: ObservableObject {
     @Published private(set) var lastAnalysisError: String?
     @Published private(set) var windowsCompleted = 0
     @Published private(set) var currentWindowStartedAt: Date?
+    @Published private(set) var latestWindow: ScreenTextWindow?
     @Published private(set) var recentAnalyses: [ScreenTextWindowAnalysisRecord] = []
 
     private let sampler: RealtimeScreenTextSampler
     private let cache: RealtimeScreenTextCache?
     private let analysisStorage: ScreenTextWindowAnalysisStorage?
     private let encounterMemory: ScreenTextEncounterMemory
+    private let llmExporter: ScreenTextLLMExporter
+    private let structureClassifier: any ScreenTextStructureClassifying
+    private let segmentDocumentExporter: ScreenTextWindowSegmentDocumentExporter
     private let sampleIntervalSeconds: TimeInterval
     private let logger = Logger(
         subsystem: Bundle.main.bundleIdentifier ?? "com.falsoai.FalsoaiLens",
@@ -43,14 +47,20 @@ final class RealtimeScreenTextPipeline: ObservableObject {
         sampler: RealtimeScreenTextSampler? = nil,
         cache: RealtimeScreenTextCache? = try? RealtimeScreenTextCache.makeDefault(),
         encounterMemory: ScreenTextEncounterMemory = ScreenTextEncounterMemory(),
+        llmExporter: ScreenTextLLMExporter = ScreenTextLLMExporter(),
+        structureClassifier: any ScreenTextStructureClassifying = HeuristicScreenTextStructureClassifier(),
+        segmentDocumentExporter: ScreenTextWindowSegmentDocumentExporter = ScreenTextWindowSegmentDocumentExporter(),
         sampleIntervalSeconds: TimeInterval = 1,
         windowAnalyzer: any ScreenTextWindowAnalyzing = StubScreenTextWindowAnalyzer(),
-        windowSeconds: TimeInterval = 5 * 60,
+        windowSeconds: TimeInterval = 60,
         analysisStorage: ScreenTextWindowAnalysisStorage? = try? ScreenTextWindowAnalysisStorage.makeDefault()
     ) {
         self.sampler = sampler ?? RealtimeScreenTextSampler()
         self.cache = cache
         self.encounterMemory = encounterMemory
+        self.llmExporter = llmExporter
+        self.structureClassifier = structureClassifier
+        self.segmentDocumentExporter = segmentDocumentExporter
         self.sampleIntervalSeconds = max(1, sampleIntervalSeconds)
         self.windowAnalyzer = windowAnalyzer
         self.windowTracker = ScreenTextWindowTracker(windowSeconds: windowSeconds)
@@ -63,6 +73,9 @@ final class RealtimeScreenTextPipeline: ObservableObject {
             await ScreenTextEncounterMemory.runSmokeChecks()
             ScreenTextWindowTracker.runSmokeChecks()
             ScreenTextLLMPreparationService.runSmokeChecks()
+            HeuristicScreenTextStructureClassifier.runSmokeChecks()
+            ScreenTextWindowSegmentReducer.runSmokeChecks()
+            try? ScreenTextWindowSegmentDocumentExporter.runSmokeChecks()
             await StubScreenTextWindowAnalyzer.runSmokeChecks()
             await ScreenTextWindowAnalysisStorage.runSmokeChecks()
         }
@@ -85,6 +98,7 @@ final class RealtimeScreenTextPipeline: ObservableObject {
         windowsCompleted = 0
         lastAnalysis = nil
         lastAnalysisError = nil
+        latestWindow = nil
         windowTracker.start(referenceDate: Date())
         currentWindowStartedAt = windowTracker.currentWindowStartedAt
         isRunning = true
@@ -177,6 +191,7 @@ final class RealtimeScreenTextPipeline: ObservableObject {
                 windowsCompleted = 0
                 lastAnalysis = nil
                 lastAnalysisError = nil
+                latestWindow = nil
                 snapshotsCached = 0
                 duplicateSamplesSkipped = 0
                 statusText = isRunning
@@ -227,7 +242,7 @@ final class RealtimeScreenTextPipeline: ObservableObject {
 
             guard try await shouldCache(snapshot) else {
                 duplicateSamplesSkipped += 1
-                statusText = "Screen text already cached; \(encounterSummary.totalEncounterCount) unique lines remain in five-minute memory."
+                statusText = "Screen text already cached; \(encounterSummary.totalEncounterCount) unique lines remain in one-minute memory."
                 await sealAndFlushWindow(at: snapshot.capturedAt)
                 return
             }
@@ -237,7 +252,7 @@ final class RealtimeScreenTextPipeline: ObservableObject {
             lastCachedLayoutHash = snapshot.aggregateLayoutHash
             snapshotsCached += 1
             refreshRecentSnapshots()
-            statusText = "Cached all-screen sample \(sequenceNumber); \(encounterSummary.totalEncounterCount) unique lines in five-minute memory."
+            statusText = "Cached all-screen sample \(sequenceNumber); \(encounterSummary.totalEncounterCount) unique lines in one-minute memory."
 
             await sealAndFlushWindow(at: snapshot.capturedAt)
         } catch {
@@ -248,7 +263,9 @@ final class RealtimeScreenTextPipeline: ObservableObject {
     }
 
     private func ingestEncounters(from snapshot: RealtimeScreenTextSnapshot) async -> ScreenTextEncounterSummary {
-        let summary = await encounterMemory.ingest(snapshot)
+        let llmDocument = llmExporter.export(snapshot.document)
+        let classifiedDocument = structureClassifier.classify(llmDocument)
+        let summary = await encounterMemory.ingest(snapshot, classifiedDocument: classifiedDocument)
         recentEncounters = await encounterMemory.recentEncounters(referenceDate: snapshot.capturedAt)
         return summary
     }
@@ -272,10 +289,12 @@ final class RealtimeScreenTextPipeline: ObservableObject {
             endedAt: interval.endedAt,
             encounters: encounters
         )
+        latestWindow = window
 
         currentWindowStartedAt = windowTracker.currentWindowStartedAt
         statusText = "Window \(sequenceNumber) sealed (\(encounters.count) lines); analyzing..."
         logger.info("Sealing window sequence=\(sequenceNumber, privacy: .public), encounters=\(encounters.count, privacy: .public)")
+        logDebugSegmentDocument(for: window)
 
         let analyzer = self.windowAnalyzer
         let task = Task { [weak self] in
@@ -288,6 +307,25 @@ final class RealtimeScreenTextPipeline: ObservableObject {
             }
         }
         windowAnalysisTasks.append(task)
+    }
+
+    private func logDebugSegmentDocument(for window: ScreenTextWindow) {
+        let document = segmentDocumentExporter.export(window)
+        let json: String
+        do {
+            json = try segmentDocumentExporter.compactJSON(document)
+        } catch {
+            json = "{\"error\":\"failed to encode segment document: \(error.localizedDescription)\"}"
+        }
+
+        let output = """
+
+        ===== ScreenTextWindow SegmentDocument JSON BEGIN =====
+        \(json)
+        ===== ScreenTextWindow SegmentDocument JSON END =====
+
+        """
+        FileHandle.standardError.write(Data(output.utf8))
     }
 
     private func handleAnalysisCompleted(_ analysis: ScreenTextWindowAnalysis) {

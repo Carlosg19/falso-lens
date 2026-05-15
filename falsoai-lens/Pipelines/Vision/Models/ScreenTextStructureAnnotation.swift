@@ -19,6 +19,8 @@ enum ScreenTextStructureRole: String, Codable, CaseIterable, Equatable, Sendable
     case codeOrLog
     case priceOrNumber
     case metadata
+    case ad
+    case chrome
     case unknown
 }
 

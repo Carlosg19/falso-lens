@@ -4,15 +4,21 @@ import Foundation
 struct StubScreenTextWindowAnalyzer: ScreenTextWindowAnalyzing {
     let analyzerID = "stub-summary-1"
     private let promptBuilder: ScreenTextLLMPreparationService
+    private let segmentReducer: ScreenTextWindowSegmentReducer
 
-    init(promptBuilder: ScreenTextLLMPreparationService = ScreenTextLLMPreparationService()) {
+    init(
+        promptBuilder: ScreenTextLLMPreparationService = ScreenTextLLMPreparationService(),
+        segmentReducer: ScreenTextWindowSegmentReducer = ScreenTextWindowSegmentReducer()
+    ) {
         self.promptBuilder = promptBuilder
+        self.segmentReducer = segmentReducer
     }
 
     func analyze(_ window: ScreenTextWindow) async throws -> ScreenTextWindowAnalysis {
         let started = Date()
-        let prompt = promptBuilder.prepare(window)
-        let summary = makeSummary(window: window, prompt: prompt)
+        let segments = segmentReducer.reduce(window)
+        let payloadJSON = (try? promptBuilder.prepareSegmentDocumentJSON(window)) ?? ""
+        let summary = makeSummary(window: window, payloadJSON: payloadJSON, segments: segments)
         let elapsed = Date().timeIntervalSince(started)
 
         return ScreenTextWindowAnalysis(
@@ -31,7 +37,11 @@ struct StubScreenTextWindowAnalyzer: ScreenTextWindowAnalyzing {
         )
     }
 
-    private func makeSummary(window: ScreenTextWindow, prompt: String) -> String {
+    private func makeSummary(
+        window: ScreenTextWindow,
+        payloadJSON: String,
+        segments: [ScreenTextWindowSegment]
+    ) -> String {
         let header = """
         ## Stub Window Summary
 
@@ -39,6 +49,7 @@ struct StubScreenTextWindowAnalyzer: ScreenTextWindowAnalyzing {
         - Window: \(window.startedAt.formatted()) → \(window.endedAt.formatted())
         - Duration: \(Int(window.durationSeconds.rounded())) s
         - Unique lines: \(window.encounterCount)
+        - Segments: \(segments.count)
         """
 
         let preview: String
@@ -49,7 +60,18 @@ struct StubScreenTextWindowAnalyzer: ScreenTextWindowAnalyzing {
                 .sorted { $0.firstSeenAt < $1.firstSeenAt }
                 .prefix(10)
                 .map { encounter in
-                    "- [seen \(encounter.seenCount)x] \(encounter.text)"
+                    "- [seen \(encounter.seenCount)x, role \(encounter.dominantRole.rawValue)] \(encounter.text)"
+                }
+                .joined(separator: "\n")
+        }
+
+        let segmentSummary: String
+        if segments.isEmpty {
+            segmentSummary = "_(none)_"
+        } else {
+            segmentSummary = segments
+                .map { segment in
+                    "- d\(segment.displayIndex + 1) role=\(segment.role.rawValue) lines=\(segment.lineCount) sightings=\(segment.totalSightingCount) repeatedUI=\(segment.isRepeatedUI)"
                 }
                 .joined(separator: "\n")
         }
@@ -57,11 +79,14 @@ struct StubScreenTextWindowAnalyzer: ScreenTextWindowAnalyzing {
         return """
         \(header)
 
+        ### Segments
+        \(segmentSummary)
+
         ### Top encounters (chronological, first 10)
         \(preview)
 
         ---
-        Prompt size: \(prompt.utf8.count) bytes (would be sent to a real LLM here)
+        LLM payload size: \(payloadJSON.utf8.count) bytes (segment document; would be sent to a real LLM here)
         """
     }
 }
@@ -86,13 +111,18 @@ extension StubScreenTextWindowAnalyzer {
     }
 
     private static func sampleEncounter(text: String) -> ScreenTextEncounter {
-        ScreenTextEncounter(
+        let firstSeen = Date(timeIntervalSince1970: 10)
+        let lastSeen = Date(timeIntervalSince1970: 20)
+        return ScreenTextEncounter(
             text: text,
             normalizedTextHash: "hash-\(text)",
-            firstSeenAt: Date(timeIntervalSince1970: 10),
-            lastSeenAt: Date(timeIntervalSince1970: 20),
+            displayID: 1,
+            displayIndex: 0,
+            firstSeenAt: firstSeen,
+            lastSeenAt: lastSeen,
             seenCount: 3,
-            latestSource: ScreenTextEncounterSource(displayID: 1, displayIndex: 0, bounds: .zero)
+            sightings: [ScreenTextEncounterSighting(bounds: .zero, sightedAt: lastSeen, role: .unknown, blockAlias: nil)],
+            roleCounts: [.unknown: 3]
         )
     }
 

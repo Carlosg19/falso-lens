@@ -28,7 +28,6 @@ struct ContentView: View {
     private let permissionManager = PermissionManager()
     private let notificationService = NotificationService()
     private let screenTextLLMExporter = ScreenTextLLMExporter()
-    private let screenTextLLMPreparationService = ScreenTextLLMPreparationService()
 
     private enum ScreenTextExportMode: String, CaseIterable, Identifiable {
         case markdown
@@ -118,8 +117,6 @@ struct ContentView: View {
 
                     realtimeScreenTextPanel
                     realtimeEncounteredTextSection
-                    windowAnalysisSection
-                    realtimeClassifierOutputSection
                     realtimeCachedTextSection
 
                     Text(permissionDebugSummary)
@@ -372,7 +369,7 @@ struct ContentView: View {
             .map { encounter in
                 let firstSeen = encounter.firstSeenAt.formatted(date: .omitted, time: .standard)
                 let lastSeen = encounter.lastSeenAt.formatted(date: .omitted, time: .standard)
-                let displayLabel = "Display \(encounter.latestSource.displayIndex + 1)"
+                let displayLabel = "Display \(encounter.displayIndex + 1)"
 
                 return [
                     "[\(firstSeen)-\(lastSeen)] \(displayLabel) seen \(encounter.seenCount)x",
@@ -386,19 +383,6 @@ struct ContentView: View {
         encounters
             .map(\.text)
             .joined(separator: "\n\n")
-    }
-
-    private func classifierOutputText(for snapshot: RealtimeScreenTextSnapshot?) -> String {
-        guard let snapshot else { return "" }
-
-        do {
-            return try screenTextLLMPreparationService
-                .prepare(snapshot)
-                .structuredMarkdown
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-        } catch {
-            return "Classifier output failed: \(error.localizedDescription)"
-        }
     }
 
     private var realtimeScreenTextPanel: some View {
@@ -480,7 +464,7 @@ struct ContentView: View {
 
         return VStack(alignment: .leading, spacing: 10) {
             HStack {
-                Text("Last 5 Minutes Screen Text")
+                Text("Last 1 Minute Screen Text")
                     .font(.headline)
                 Spacer()
                 Text("\(encounters.count) unique lines | \(totalSightings) sightings")
@@ -510,136 +494,6 @@ struct ContentView: View {
                     .padding(10)
             }
             .frame(minHeight: 220, maxHeight: 360)
-            .background(Color(nsColor: .textBackgroundColor))
-            .clipShape(RoundedRectangle(cornerRadius: 6))
-        }
-        .frame(maxWidth: .infinity, alignment: .topLeading)
-        .padding()
-        .background(.thinMaterial)
-        .clipShape(RoundedRectangle(cornerRadius: 8))
-    }
-
-    private var realtimeClassifierOutputSection: some View {
-        let latestSnapshot = realtimeScreenText.latestSnapshot
-        let classifierText = classifierOutputText(for: latestSnapshot)
-
-        return VStack(alignment: .leading, spacing: 10) {
-            HStack {
-                Text("Classifier Layer Output")
-                    .font(.headline)
-                Spacer()
-                if let latestSnapshot {
-                    Text("Sample \(latestSnapshot.sequenceNumber)")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-                Button {
-                    copyToPasteboard(classifierText)
-                } label: {
-                    Label("Copy", systemImage: "doc.on.doc")
-                }
-                .disabled(classifierText.isEmpty)
-            }
-
-            if let latestSnapshot {
-                HStack(spacing: 12) {
-                    Label("\(latestSnapshot.displayCount) displays", systemImage: "display.2")
-                    Label("\(latestSnapshot.blockCount) blocks", systemImage: "text.alignleft")
-                    Label("\(classifierText.count) chars", systemImage: "textformat.size")
-                }
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            }
-
-            ScrollView {
-                Text(classifierText.isEmpty ? "No classifier output yet." : classifierText)
-                    .font(.system(.body, design: .monospaced))
-                    .foregroundStyle(classifierText.isEmpty ? .secondary : .primary)
-                    .textSelection(.enabled)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(10)
-            }
-            .frame(minHeight: 220, maxHeight: 360)
-            .background(Color(nsColor: .textBackgroundColor))
-            .clipShape(RoundedRectangle(cornerRadius: 6))
-        }
-        .frame(maxWidth: .infinity, alignment: .topLeading)
-        .padding()
-        .background(.thinMaterial)
-        .clipShape(RoundedRectangle(cornerRadius: 8))
-    }
-
-    private var windowAnalysisSection: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack {
-                Text("5-Minute Window Analyses")
-                    .font(.headline)
-                Spacer()
-                Text("\(realtimeScreenText.recentAnalyses.count) saved")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                Button {
-                    realtimeScreenText.clearAnalyses()
-                } label: {
-                    Label("Clear", systemImage: "trash")
-                }
-                .disabled(realtimeScreenText.recentAnalyses.isEmpty)
-            }
-
-            if let started = realtimeScreenText.currentWindowStartedAt {
-                Text("Current window started \(started.formatted(date: .omitted, time: .standard)) — windows completed: \(realtimeScreenText.windowsCompleted)")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            } else if realtimeScreenText.windowsCompleted > 0 {
-                Text("Recording stopped — \(realtimeScreenText.windowsCompleted) window\(realtimeScreenText.windowsCompleted == 1 ? "" : "s") completed this session")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            } else {
-                Text("Start a recording session; the first analysis appears after five minutes of captured text.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-
-            if let lastError = realtimeScreenText.lastAnalysisError {
-                Text(lastError)
-                    .font(.caption)
-                    .foregroundStyle(.red)
-            }
-
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 12) {
-                    if realtimeScreenText.recentAnalyses.isEmpty {
-                        Text("No window analyses yet.")
-                            .foregroundStyle(.secondary)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                    } else {
-                        ForEach(realtimeScreenText.recentAnalyses) { record in
-                            VStack(alignment: .leading, spacing: 6) {
-                                HStack {
-                                    Text("Window \(record.sequenceNumber) — \(record.analyzerID)")
-                                        .font(.subheadline.weight(.semibold))
-                                    Spacer()
-                                    Text(record.generatedAt.formatted(date: .abbreviated, time: .standard))
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
-                                }
-                                Text("\(record.encounterCount) lines · \(String(format: "%.2f", record.latencySeconds)) s analyzer")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                                Text(record.summaryMarkdown)
-                                    .font(.system(.body, design: .monospaced))
-                                    .textSelection(.enabled)
-                                    .frame(maxWidth: .infinity, alignment: .leading)
-                            }
-                            .padding(10)
-                            .background(Color(nsColor: .textBackgroundColor).opacity(0.6))
-                            .clipShape(RoundedRectangle(cornerRadius: 6))
-                        }
-                    }
-                }
-                .padding(8)
-            }
-            .frame(minHeight: 220, maxHeight: 480)
             .background(Color(nsColor: .textBackgroundColor))
             .clipShape(RoundedRectangle(cornerRadius: 6))
         }
