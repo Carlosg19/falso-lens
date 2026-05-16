@@ -290,17 +290,18 @@ final class RealtimeScreenTextPipeline: ObservableObject {
             encounters: encounters
         )
         latestWindow = window
+        let segmentDocument = segmentDocumentExporter.export(window)
 
         currentWindowStartedAt = windowTracker.currentWindowStartedAt
         statusText = "Window \(sequenceNumber) sealed (\(encounters.count) lines); analyzing..."
         logger.info("Sealing window sequence=\(sequenceNumber, privacy: .public), encounters=\(encounters.count, privacy: .public)")
-        logDebugSegmentDocument(for: window)
+        logDebugSegmentDocument(segmentDocument)
 
         let analyzer = self.windowAnalyzer
         let task = Task { [weak self] in
             guard !Task.isCancelled else { return }
             do {
-                let analysis = try await analyzer.analyze(window)
+                let analysis = try await analyzer.analyze(segmentDocument)
                 await self?.handleAnalysisCompleted(analysis)
             } catch {
                 await self?.handleAnalysisFailed(error: error, window: window)
@@ -309,8 +310,7 @@ final class RealtimeScreenTextPipeline: ObservableObject {
         windowAnalysisTasks.append(task)
     }
 
-    private func logDebugSegmentDocument(for window: ScreenTextWindow) {
-        let document = segmentDocumentExporter.export(window)
+    private func logDebugSegmentDocument(_ document: ScreenTextWindowSegmentDocument) {
         let json: String
         do {
             json = try segmentDocumentExporter.compactJSON(document)

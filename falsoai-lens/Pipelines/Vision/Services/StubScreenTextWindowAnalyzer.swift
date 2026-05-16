@@ -1,25 +1,16 @@
-import CoreGraphics
 import Foundation
 
 struct StubScreenTextWindowAnalyzer: ScreenTextWindowAnalyzing {
     let analyzerID = "stub-summary-1"
-    private let promptBuilder: ScreenTextLLMPreparationService
-    private let segmentReducer: ScreenTextWindowSegmentReducer
 
-    init(
-        promptBuilder: ScreenTextLLMPreparationService = ScreenTextLLMPreparationService(),
-        segmentReducer: ScreenTextWindowSegmentReducer = ScreenTextWindowSegmentReducer()
-    ) {
-        self.promptBuilder = promptBuilder
-        self.segmentReducer = segmentReducer
-    }
+    init() {}
 
-    func analyze(_ window: ScreenTextWindow) async throws -> ScreenTextWindowAnalysis {
+    func analyze(_ document: ScreenTextWindowSegmentDocument) async throws -> ScreenTextWindowAnalysis {
         let started = Date()
-        let segments = segmentReducer.reduce(window)
-        let payloadJSON = (try? promptBuilder.prepareSegmentDocumentJSON(window)) ?? ""
-        let summary = makeSummary(window: window, payloadJSON: payloadJSON, segments: segments)
+        let payloadJSON = (try? compactJSON(document)) ?? ""
+        let summary = makeSummary(document: document, payloadJSON: payloadJSON)
         let elapsed = Date().timeIntervalSince(started)
+        let window = document.window
 
         return ScreenTextWindowAnalysis(
             id: UUID(),
@@ -37,41 +28,49 @@ struct StubScreenTextWindowAnalyzer: ScreenTextWindowAnalyzing {
         )
     }
 
+    private func compactJSON(_ document: ScreenTextWindowSegmentDocument) throws -> String {
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        encoder.outputFormatting = [.sortedKeys]
+        let data = try encoder.encode(document)
+        return String(decoding: data, as: UTF8.self)
+    }
+
     private func makeSummary(
-        window: ScreenTextWindow,
-        payloadJSON: String,
-        segments: [ScreenTextWindowSegment]
+        document: ScreenTextWindowSegmentDocument,
+        payloadJSON: String
     ) -> String {
+        let window = document.window
         let header = """
         ## Stub Window Summary
 
         - Sequence: \(window.sequenceNumber)
-        - Window: \(window.startedAt.formatted()) → \(window.endedAt.formatted())
+        - Window: \(window.startedAt.formatted()) -> \(window.endedAt.formatted())
         - Duration: \(Int(window.durationSeconds.rounded())) s
         - Unique lines: \(window.encounterCount)
-        - Segments: \(segments.count)
+        - Segments: \(document.segments.count)
         """
 
-        let preview: String
-        if window.encounters.isEmpty {
-            preview = "_(none)_"
+        let segmentSummary: String
+        if document.segments.isEmpty {
+            segmentSummary = "_(none)_"
         } else {
-            preview = window.encounters
-                .sorted { $0.firstSeenAt < $1.firstSeenAt }
-                .prefix(10)
-                .map { encounter in
-                    "- [seen \(encounter.seenCount)x, role \(encounter.dominantRole.rawValue)] \(encounter.text)"
+            segmentSummary = document.segments
+                .map { segment in
+                    "- d\(segment.displayIndex + 1) role=\(segment.role.rawValue) lines=\(segment.lineCount) sightings=\(segment.totalSightingCount) repeatedUI=\(segment.isRepeatedUI)"
                 }
                 .joined(separator: "\n")
         }
 
-        let segmentSummary: String
-        if segments.isEmpty {
-            segmentSummary = "_(none)_"
+        let preview: String
+        if document.segments.isEmpty {
+            preview = "_(none)_"
         } else {
-            segmentSummary = segments
+            preview = document.segments
+                .sorted { $0.firstSightedAt < $1.firstSightedAt }
+                .prefix(10)
                 .map { segment in
-                    "- d\(segment.displayIndex + 1) role=\(segment.role.rawValue) lines=\(segment.lineCount) sightings=\(segment.totalSightingCount) repeatedUI=\(segment.isRepeatedUI)"
+                    "- [role \(segment.role.rawValue), lines \(segment.lineCount)] \(segment.text)"
                 }
                 .joined(separator: "\n")
         }
@@ -82,7 +81,7 @@ struct StubScreenTextWindowAnalyzer: ScreenTextWindowAnalyzing {
         ### Segments
         \(segmentSummary)
 
-        ### Top encounters (chronological, first 10)
+        ### Top segment text (chronological, first 10)
         \(preview)
 
         ---
@@ -99,37 +98,44 @@ extension StubScreenTextWindowAnalyzer {
         await verifyEmptyWindowStillProducesAnalysis()
     }
 
-    private static func sampleWindow(encounters: [ScreenTextEncounter] = []) -> ScreenTextWindow {
-        ScreenTextWindow(
-            id: UUID(),
-            sessionID: UUID(),
-            sequenceNumber: 7,
-            startedAt: Date(timeIntervalSince1970: 0),
-            endedAt: Date(timeIntervalSince1970: 300),
-            encounters: encounters
+    private static func sampleDocument(segments: [ScreenTextWindowSegmentDTO] = []) -> ScreenTextWindowSegmentDocument {
+        ScreenTextWindowSegmentDocument(
+            window: ScreenTextWindowMetadataDTO(
+                id: UUID(),
+                sessionID: UUID(),
+                sequenceNumber: 7,
+                startedAt: Date(timeIntervalSince1970: 0),
+                endedAt: Date(timeIntervalSince1970: 300),
+                durationSeconds: 300,
+                displayCount: segments.isEmpty ? 0 : 1,
+                encounterCount: segments.reduce(0) { $0 + $1.lineCount },
+                segmentCount: segments.count
+            ),
+            segments: segments
         )
     }
 
-    private static func sampleEncounter(text: String) -> ScreenTextEncounter {
-        let firstSeen = Date(timeIntervalSince1970: 10)
-        let lastSeen = Date(timeIntervalSince1970: 20)
-        return ScreenTextEncounter(
-            text: text,
-            normalizedTextHash: "hash-\(text)",
+    private static func sampleSegment(text: String, role: ScreenTextStructureRole = .unknown) -> ScreenTextWindowSegmentDTO {
+        ScreenTextWindowSegmentDTO(
+            id: "display-0-\(role.rawValue)-\(text)",
             displayID: 1,
             displayIndex: 0,
-            firstSeenAt: firstSeen,
-            lastSeenAt: lastSeen,
-            seenCount: 3,
-            sightings: [ScreenTextEncounterSighting(bounds: .zero, sightedAt: lastSeen, role: .unknown, blockAlias: nil)],
-            roleCounts: [.unknown: 3]
+            role: role,
+            bounds: ScreenTextWindowBoundsDTO(x: 0, y: 0, width: 100, height: 20),
+            text: text,
+            lineCount: 1,
+            totalSightingCount: 3,
+            firstSightedAt: Date(timeIntervalSince1970: 10),
+            lastSightedAt: Date(timeIntervalSince1970: 20),
+            isRepeatedUI: false
         )
     }
 
     private static func verifyAnalyzerProducesAnalysisCarryingWindowIdentity() async {
         let analyzer = StubScreenTextWindowAnalyzer()
-        let window = sampleWindow(encounters: [sampleEncounter(text: "hello")])
-        let analysis = try? await analyzer.analyze(window)
+        let document = sampleDocument(segments: [sampleSegment(text: "hello")])
+        let analysis = try? await analyzer.analyze(document)
+        let window = document.window
         assert(analysis != nil, "Stub analyzer threw")
         assert(analysis?.windowID == window.id, "Analysis windowID does not match window")
         assert(analysis?.sessionID == window.sessionID, "Analysis sessionID does not match window")
@@ -142,26 +148,26 @@ extension StubScreenTextWindowAnalyzer {
 
     private static func verifyAnalyzerSummaryMentionsEncounterCount() async {
         let analyzer = StubScreenTextWindowAnalyzer()
-        let window = sampleWindow(encounters: [
-            sampleEncounter(text: "alpha"),
-            sampleEncounter(text: "beta")
+        let document = sampleDocument(segments: [
+            sampleSegment(text: "alpha"),
+            sampleSegment(text: "beta")
         ])
-        let analysis = try? await analyzer.analyze(window)
+        let analysis = try? await analyzer.analyze(document)
         let summary = analysis?.summaryMarkdown ?? ""
         assert(summary.contains("Unique lines: 2"),
                "Stub summary missing encounter count line")
         assert(summary.contains("alpha") && summary.contains("beta"),
-               "Stub summary missing encounter texts")
+               "Stub summary missing segment texts")
     }
 
     private static func verifyEmptyWindowStillProducesAnalysis() async {
         let analyzer = StubScreenTextWindowAnalyzer()
-        let window = sampleWindow()
-        let analysis = try? await analyzer.analyze(window)
-        assert(analysis != nil, "Stub analyzer threw on empty window")
-        assert(analysis?.encounterCount == 0, "Stub analysis encounterCount mismatch on empty window")
+        let document = sampleDocument()
+        let analysis = try? await analyzer.analyze(document)
+        assert(analysis != nil, "Stub analyzer threw on empty document")
+        assert(analysis?.encounterCount == 0, "Stub analysis encounterCount mismatch on empty document")
         assert(analysis?.summaryMarkdown.contains("_(none)_") == true,
-               "Stub summary did not mark empty encounters")
+               "Stub summary did not mark empty segments")
     }
 }
 #endif

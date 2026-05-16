@@ -14,27 +14,15 @@ struct ScreenTextLLMPreparationService {
     private let exporter: ScreenTextLLMExporter
     private let classifier: any ScreenTextStructureClassifying
     private let promptExporter: ScreenTextStructuredPromptExporter
-    private let segmentDocumentExporter: ScreenTextWindowSegmentDocumentExporter
 
     init(
         exporter: ScreenTextLLMExporter = ScreenTextLLMExporter(),
         classifier: any ScreenTextStructureClassifying = HeuristicScreenTextStructureClassifier(),
-        promptExporter: ScreenTextStructuredPromptExporter = ScreenTextStructuredPromptExporter(),
-        segmentDocumentExporter: ScreenTextWindowSegmentDocumentExporter = ScreenTextWindowSegmentDocumentExporter()
+        promptExporter: ScreenTextStructuredPromptExporter = ScreenTextStructuredPromptExporter()
     ) {
         self.exporter = exporter
         self.classifier = classifier
         self.promptExporter = promptExporter
-        self.segmentDocumentExporter = segmentDocumentExporter
-    }
-
-    func prepareSegmentDocument(_ window: ScreenTextWindow) -> ScreenTextWindowSegmentDocument {
-        segmentDocumentExporter.export(window)
-    }
-
-    func prepareSegmentDocumentJSON(_ window: ScreenTextWindow) throws -> String {
-        let document = segmentDocumentExporter.export(window)
-        return try segmentDocumentExporter.compactJSON(document)
     }
 
     func prepare(
